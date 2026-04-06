@@ -8,8 +8,8 @@ export interface ModelChainConfig {
 export const MODEL_CHAINS: Readonly<Record<AgentRole, ModelChainConfig>> = {
   planning: {
     models: [
-      'qwen3.5:35b',
       'qwen3.5:27b',
+      'qwen3.5:35b',
     ],
     temperature: 0.3,
   },
@@ -22,9 +22,9 @@ export const MODEL_CHAINS: Readonly<Record<AgentRole, ModelChainConfig>> = {
   },
   documentation: {
     models: [
-      'qwen3.5:35b',
-      'devstral-small-2:24b',
       'qwen3.5:27b',
+      'devstral-small-2:24b',
+      'qwen3.5:35b',
     ],
     temperature: 0.1,
   },
