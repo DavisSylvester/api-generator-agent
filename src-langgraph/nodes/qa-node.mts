@@ -79,9 +79,11 @@ export async function qaNode(
   console.log(`[qa-node] Running tests: ${testFilePath}`);
   const testStartMs = performance.now();
 
+  // cwd must be the task root (parent of code/ and tests/) so bun test can find the test file
+  const taskDir = join(testsDir, '..');
   try {
     const proc = Bun.spawn(['bun', 'test', testFilePath], {
-      cwd: codeDir,
+      cwd: taskDir,
       stdout: 'pipe',
       stderr: 'pipe',
       env: { ...Bun.env },

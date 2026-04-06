@@ -80,9 +80,11 @@ export class QaAgent extends BaseAgent<QaInput, QaResult> {
       await writeFile(codePath, file.content, 'utf-8');
     }
 
-    this.logger.info(`[qa] Running tests: ${testFilePath}`);
+    // cwd must be the task root (parent of code/ and tests/) so bun test can find the test file
+    const taskDir = join(testsDir, '..');
+    this.logger.info(`[qa] Running tests: ${testFilePath} (cwd: ${taskDir})`);
     const testStartMs = performance.now();
-    const testResult = await this.runTests(testFilePath, codeDir);
+    const testResult = await this.runTests(testFilePath, taskDir);
     const testDurationMs = Math.round(performance.now() - testStartMs);
 
     if (testResult.passed) {
