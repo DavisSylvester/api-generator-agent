@@ -157,7 +157,12 @@ export async function runFixLoop(
 
     // QA failed — prepare for next iteration
     logger.warn(`[fix-loop] Task ${task.id} failed QA (iteration ${iteration + 1}): ${qa.errors.length} errors`);
-    lastErrors = qa.errors;
+    for (const error of qa.errors.slice(0, 10)) {
+      logger.warn(`[fix-loop]   - ${error.substring(0, 200)}`);
+    }
+    lastErrors = qa.errors.length > 0
+      ? qa.errors
+      : [`Tests failed with exit code non-zero. Full output:\n${qa.testOutput.substring(0, 2000)}`];
     lastCode = codeFiles;
 
     await writeJson(`${workspace.iterationDir(task.id, iteration)}/errors.json`, {

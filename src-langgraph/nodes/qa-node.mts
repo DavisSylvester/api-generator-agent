@@ -131,15 +131,35 @@ function parseTestFile(content: string): string | undefined {
 function extractErrors(output: string): readonly string[] {
   const errors: string[] = [];
   for (const line of output.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
     if (
-      line.includes('error') ||
-      line.includes('Error') ||
-      line.includes('FAIL') ||
-      line.includes('✗') ||
-      line.includes('expected')
+      trimmed.includes('error') ||
+      trimmed.includes('Error') ||
+      trimmed.includes('FAIL') ||
+      trimmed.includes('fail') ||
+      trimmed.includes('✗') ||
+      trimmed.includes('expected') ||
+      trimmed.includes('Cannot find') ||
+      trimmed.includes('not found') ||
+      trimmed.includes('SyntaxError') ||
+      trimmed.includes('TypeError') ||
+      trimmed.includes('ReferenceError') ||
+      trimmed.includes('ModuleNotFound') ||
+      trimmed.includes('Import') ||
+      trimmed.includes('resolve') ||
+      trimmed.includes('ENOENT') ||
+      trimmed.includes('panic') ||
+      trimmed.startsWith('^')
     ) {
-      errors.push(line.trim());
+      errors.push(trimmed);
     }
   }
+
+  if (errors.length === 0 && output.trim().length > 0) {
+    const truncated = output.trim().substring(0, 2000);
+    errors.push(`Test output (no specific errors extracted):\n${truncated}`);
+  }
+
   return errors;
 }
