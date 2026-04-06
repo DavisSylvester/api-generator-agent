@@ -1,0 +1,32 @@
+export type TaskType = 'setup' | 'model' | 'endpoint' | 'middleware' | 'service' | 'repository';
+
+export type TaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+
+export interface Task {
+  readonly id: string;
+  readonly name: string;
+  readonly description: string;
+  readonly dependsOn: readonly string[];
+  readonly type: TaskType;
+  readonly metadata: Record<string, unknown>;
+}
+
+export interface TaskGraph {
+  readonly runId: string;
+  readonly prdHash: string;
+  readonly tasks: readonly Task[];
+}
+
+export interface TaskResult {
+  readonly taskId: string;
+  readonly status: TaskStatus;
+  readonly iteration: number;
+  readonly codeFiles: readonly CodeFile[];
+  readonly errors: readonly string[];
+  readonly lastError?: string;
+}
+
+export interface CodeFile {
+  readonly path: string;
+  readonly content: string;
+}

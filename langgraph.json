@@ -1,0 +1,9 @@
+{
+  "node_version": "22",
+  "graphs": {
+    "pipeline": "./src-langgraph/graphs/pipeline.ts:graph",
+    "task_loop": "./src-langgraph/graphs/task-loop.ts:graph"
+  },
+  "env": ".env",
+  "dependencies": ["."]
+}

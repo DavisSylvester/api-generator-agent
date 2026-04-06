@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm view:*)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(cd /tmp)",
+      "Bash(gh api:*)",
+      "Bash(curl -s https://api.github.com/repos/ollama/ollama-js/contents/examples)",
+      "Bash(python3 -c \"import sys,json; [print\\(x['name']\\) for x in json.loads\\(sys.stdin.read\\(\\)\\)]\")",
+      "Bash(curl -s https://api.github.com/repos/ollama/ollama-js/contents/examples/structured_outputs)",
+      "WebFetch(domain:api.github.com)",
+      "Bash(python3:*)",
+      "Bash(node:*)",
+      "Bash(bun add:*)",
+      "Bash(bunx tsc:*)",
+      "Bash(bun pm:*)",
+      "Bash(bun run:*)",
+      "Bash(pip install:*)",
+      "Bash(C:/Users/davis/AppData/Roaming/Python/Python313/Scripts/langgraph dev:*)",
+      "Bash(bunx @langchain/langgraph-cli --help)",
+      "Bash(bunx @langchain/langgraph-cli dev --help)",
+      "Bash(npx @langchain/langgraph-cli dev --help)",
+      "Bash(npx @langchain/langgraph-cli dev --no-browser --port 2024)",
+      "Bash(curl:*)",
+      "Bash(npx playwright:*)",
+      "Bash(rm:*)"
+    ]
+  }
+}
