@@ -71,6 +71,7 @@ export class CodegenAgent extends BaseAgent<CodegenInput, CodegenOutput> {
 
     if (files.length === 0) {
       this.logger.warn('[codegen] No code blocks found in LLM response');
+      this.logger.warn(`[codegen] Raw response (first 500 chars): ${content.substring(0, 500)}`);
       return err(new Error('No code blocks found in codegen response'));
     }
 
@@ -85,24 +86,29 @@ export class CodegenAgent extends BaseAgent<CodegenInput, CodegenOutput> {
 
 function parseCodeBlocks(content: string): CodeFile[] {
   const files: CodeFile[] = [];
-  const regex = /```([^\n]+\.mts)\n([\s\S]*?)```/g;
 
+  // Try: ```path/to/file.mts or ```path/to/file.ts
+  const pathRegex = /```([^\n]+\.(?:mts|ts))\n([\s\S]*?)```/g;
   let match: RegExpExecArray | null;
-  while ((match = regex.exec(content)) !== null) {
+  while ((match = pathRegex.exec(content)) !== null) {
     const path = match[1]?.trim();
     const code = match[2]?.trim();
     if (path && code) {
-      files.push({ path, content: code });
+      const normalizedPath = path.endsWith('.ts') && !path.endsWith('.mts')
+        ? path.replace(/\.ts$/, '.mts')
+        : path;
+      files.push({ path: normalizedPath, content: code });
     }
   }
 
+  // Fallback: ```typescript or ```ts or bare ``` blocks
   if (files.length === 0) {
-    const fallbackRegex = /```(?:typescript|ts)?\n([\s\S]*?)```/g;
+    const fallbackRegex = /```(?:typescript|ts|mts)?\n([\s\S]*?)```/g;
     let fallbackMatch: RegExpExecArray | null;
     let index = 0;
     while ((fallbackMatch = fallbackRegex.exec(content)) !== null) {
       const code = fallbackMatch[1]?.trim();
-      if (code) {
+      if (code && code.length > 10) {
         files.push({ path: `generated-${index}.mts`, content: code });
         index++;
       }
