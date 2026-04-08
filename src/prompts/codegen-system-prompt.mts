@@ -26,6 +26,25 @@ You generate production-quality code following strict architectural patterns.
   \`\`\`typescript
   Type.String({ pattern: '^[\\\\w.-]+@[\\\\w.-]+\\\\.[a-zA-Z]{2,}$' })
   \`\`\`
+- **TypeBox Optional & Default Rules (CRITICAL)**:
+  - Optional fields: wrap with \`Type.Optional()\` — do NOT use \`{ optional: true }\` (TypeBox ignores it)
+    \`\`\`typescript
+    // CORRECT
+    Type.Object({ name: Type.String(), bio: Type.Optional(Type.String()) })
+
+    // WRONG — optional property is ignored, bio becomes required
+    Type.Object({ name: Type.String(), bio: Type.String({ optional: true }) })
+    \`\`\`
+  - Defaults: \`Value.Check()\` does NOT apply defaults. Use \`Value.Default()\` first if you need defaults:
+    \`\`\`typescript
+    const data = Value.Default(MySchema, rawInput)  // applies defaults
+    const isValid = Value.Check(MySchema, data)      // then validate
+    \`\`\`
+  - Partial updates: use \`Type.Partial()\` to make all fields optional:
+    \`\`\`typescript
+    const UpdateSchema = Type.Partial(CreateSchema)
+    \`\`\`
+  - Use \`Type.Number()\` not \`Type.Integer()\` for general numeric fields (JS numbers are floats)
 - **Environment variable validation**: \`process.env\` values are ALWAYS strings. Do NOT use \`Type.Number()\` or \`Type.Integer()\` for env vars — use \`Type.String()\` and parse manually:
   \`\`\`typescript
   const EnvSchema = Type.Object({
