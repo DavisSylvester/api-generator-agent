@@ -51,7 +51,7 @@ export interface QaResult {
 export class QaAgent extends BaseAgent<QaInput, QaResult> {
 
   constructor(modelChain: ModelChainConfig, llmFactory: OllamaFactory, logger: Logger, timeoutMs?: number) {
-    super('qa', modelChain, llmFactory, logger, timeoutMs, true);
+    super(`qa`, modelChain, llmFactory, logger, timeoutMs, false);
   }
 
   protected async execute(

@@ -77,7 +77,7 @@ export function createContainer(env: EnvConfig): Container {
 
   const qaAgent = new QaAgent(
     MODEL_CHAINS.qa,
-    localFactory,
+    codegenFactory,
     logger,
     timeoutMs,
   );

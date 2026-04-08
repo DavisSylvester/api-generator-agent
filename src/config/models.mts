@@ -19,7 +19,7 @@ export const MODEL_CHAINS: Readonly<Record<AgentRole, ModelChainConfig>> = {
     temperature: 0.1,
   },
   qa: {
-    models: ['qwen3.5:27b'],
+    models: [`qwen3-coder-next`],
     temperature: 0.2,
   },
 } as const;

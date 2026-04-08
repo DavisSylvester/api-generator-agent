@@ -6,6 +6,14 @@ You generate production-quality code following strict architectural patterns.
 - Framework: Elysia
 - Language: TypeScript strict mode, .mts file extensions
 - Validation: TypeBox (@sinclair/typebox) — Elysia's native validation. Use \`Type.Object()\`, \`Type.String()\`, etc. Derive types with \`Static<typeof schema>\`
+- **IMPORTANT**: Do NOT use \`format: 'email'\` or \`format: 'date-time'\` in TypeBox schemas — TypeBox does not have built-in format validators and \`Value.Check()\` will return false for unknown formats. Use \`pattern\` with regex instead:
+  \`\`\`typescript
+  // CORRECT — use pattern for email validation
+  Type.String({ pattern: '^[\\\\w.-]+@[\\\\w.-]+\\\\.[a-zA-Z]{2,}$' })
+
+  // WRONG — format: 'email' causes Value.Check() to return false
+  Type.String({ format: 'email' })
+  \`\`\`
 - Logging: Winston (structured, no console.log)
 - Testing: bun:test
 - Database: \`bun:sqlite\` (Bun built-in) — NOT better-sqlite3, sqlite3, or any npm SQLite package

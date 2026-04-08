@@ -29,7 +29,7 @@ All generated code prompts and documentation have been migrated from Zod to Type
 | `z.enum(['a', 'b'])`                   | `Type.Union([Type.Literal('a'), Type.Literal('b')])` |
 | `z.string().optional()`                | `Type.Optional(Type.String())`                       |
 | `z.string().min(1)`                    | `Type.String({ minLength: 1 })`                      |
-| `z.string().email()`                   | `Type.String({ format: 'email' })`                   |
+| `z.string().email()`                   | `Type.String({ pattern: '^[\\w.-]+@[\\w.-]+\\.[a-zA-Z]{2,}$' })`                   |
 | `z.string().url()`                     | `Type.String({ format: 'uri' })`                     |
 | `z.number().min(0)`                    | `Type.Number({ minimum: 0 })`                        |
 | `z.number().int()`                     | `Type.Integer()`                                     |
@@ -49,7 +49,7 @@ import { Type, Static } from '@sinclair/typebox'
 
 const UserSchema = Type.Object({
   name: Type.String({ minLength: 1 }),
-  email: Type.String({ format: 'email' }),
+  email: Type.String({ pattern: '^[\\w.-]+@[\\w.-]+\\.[a-zA-Z]{2,}$' }),
   password: Type.String({ minLength: 8 }),
   age: Type.Optional(Type.Number({ minimum: 0 })),
 })
