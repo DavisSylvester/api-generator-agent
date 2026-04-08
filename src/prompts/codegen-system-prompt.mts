@@ -5,14 +5,26 @@ You generate production-quality code following strict architectural patterns.
 - Runtime: BunJS (latest)
 - Framework: Elysia
 - Language: TypeScript strict mode, .mts file extensions
-- Validation: TypeBox (@sinclair/typebox) — Elysia's native validation. Use \`Type.Object()\`, \`Type.String()\`, etc. Derive types with \`Static<typeof schema>\`
-- **IMPORTANT**: Do NOT use \`format: 'email'\` or \`format: 'date-time'\` in TypeBox schemas — TypeBox does not have built-in format validators and \`Value.Check()\` will return false for unknown formats. Use \`pattern\` with regex instead:
-  \`\`\`typescript
-  // CORRECT — use pattern for email validation
-  Type.String({ pattern: '^[\\\\w.-]+@[\\\\w.-]+\\\\.[a-zA-Z]{2,}$' })
+- Validation: TypeBox (@sinclair/typebox) — Elysia's native validation
+- **TypeBox Import Rules (CRITICAL)**:
+  - Schema types: \`import { Type, Static } from '@sinclair/typebox'\`
+  - Validation functions: \`import { Value } from '@sinclair/typebox/value'\` — note the \`/value\` subpath!
+  - Do NOT import \`Value\` from \`@sinclair/typebox\` — it does not exist there
+  - Do NOT use \`Type.Check()\` — the check function is \`Value.Check()\` from the \`/value\` subpath
+  - Example:
+    \`\`\`typescript
+    import { Type, Static } from '@sinclair/typebox'
+    import { Value } from '@sinclair/typebox/value'
 
-  // WRONG — format: 'email' causes Value.Check() to return false
-  Type.String({ format: 'email' })
+    const UserSchema = Type.Object({ name: Type.String(), email: Type.String() })
+    type User = Static<typeof UserSchema>
+
+    const isValid = Value.Check(UserSchema, data)  // boolean
+    const errors = [...Value.Errors(UserSchema, data)]  // error details
+    \`\`\`
+- Do NOT use \`format: 'email'\` or \`format: 'date-time'\` in TypeBox schemas — TypeBox does not have built-in format validators. Use \`pattern\` with regex instead:
+  \`\`\`typescript
+  Type.String({ pattern: '^[\\\\w.-]+@[\\\\w.-]+\\\\.[a-zA-Z]{2,}$' })
   \`\`\`
 - Logging: Winston (structured, no console.log)
 - Testing: bun:test

@@ -199,6 +199,36 @@ export function analyzeTestErrors(testOutput: string): readonly KnowledgeEntry[]
     });
   }
 
+  // Pattern: TypeBox wrong import path or API
+  if (testOutput.includes(`not found in module`) && testOutput.includes(`typebox`)) {
+    const exportMatch = /Export named '(\w+)' not found/.exec(testOutput);
+    const name = exportMatch?.[1] ?? `unknown`;
+
+    entries.push({
+      pattern: `TypeBox wrong import path`,
+      lesson: [
+        `Export '${name}' not found in @sinclair/typebox.`,
+        `TypeBox has separate subpath imports:`,
+        `- Schema types: \`import { Type, Static } from '@sinclair/typebox'\``,
+        `- Validation: \`import { Value } from '@sinclair/typebox/value'\` (note /value subpath!)`,
+        `Do NOT import Value from '@sinclair/typebox' — it must come from '@sinclair/typebox/value'.`,
+        `Do NOT use Type.Check() — use Value.Check() from '@sinclair/typebox/value'.`,
+      ].join(`\n`),
+      timestamp,
+    });
+  }
+
+  if (testOutput.includes(`Type.Check is not a function`)) {
+    entries.push({
+      pattern: `TypeBox Type.Check does not exist`,
+      lesson: [
+        `Type.Check() does not exist in TypeBox. The correct function is Value.Check().`,
+        `Fix: \`import { Value } from '@sinclair/typebox/value'\` then \`Value.Check(schema, data)\``,
+      ].join(`\n`),
+      timestamp,
+    });
+  }
+
   // Pattern: native addon load failure or unsupported Bun module
   if (testOutput.includes(`ERR_DLOPEN_FAILED`) || testOutput.includes(`is not yet supported in Bun`)) {
     const dlopenMatch = /Cannot (?:load|open) (?:native addon|shared library)[^:]*:\s*(.+)/.exec(testOutput);
