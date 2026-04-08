@@ -91,7 +91,7 @@ import { t } from 'elysia'
 // Using TypeBox (Elysia native) — via Elysia's re-export `t`
 export const createUserSchema = t.Object({
   name: t.String({ minLength: 1 }),
-  email: t.String({ format: 'email' }),
+  email: t.String({ pattern: '^[\\w.-]+@[\\w.-]+\\.[a-zA-Z]{2,}$' }),
 })
 
 export const getUserSchema = t.Object({
@@ -99,12 +99,17 @@ export const getUserSchema = t.Object({
 })
 
 export const listUsersSchema = t.Object({
-  limit: t.Optional(t.Number({ minimum: 1, maximum: 100, default: 20 })),
-  offset: t.Optional(t.Number({ minimum: 0, default: 0 })),
+  limit: t.Optional(t.Number({ minimum: 1, maximum: 100 }), 20),
+  offset: t.Optional(t.Number({ minimum: 0 }), 0),
   sort: t.Optional(t.String()),
   filter: t.Optional(t.String()),
 })
 ```
+
+**TypeBox Optional/Default rules:**
+- `t.Optional(t.String())` — wraps the type. Never use `{ optional: true }`.
+- `t.Optional(t.Number(), 20)` — optional with default value as second arg.
+- `Type.Union([...], { default: 'value' })` — default for unions via options object.
 
 ---
 

@@ -40,6 +40,60 @@ All generated code prompts and documentation have been migrated from Zod to Type
 | `schema.safeParse(data)`               | `Value.Check(schema, data)` (returns boolean)        |
 | `schema.safeParse(data).error`         | `[...Value.Errors(schema, data)]`                    |
 
+## Optional & Default Patterns (CRITICAL)
+
+TypeBox handles optional fields and defaults differently from Zod. These are the correct patterns:
+
+```typescript
+import { Type, Static } from '@sinclair/typebox'
+
+export const CreateTodoInput = Type.Object({
+  title: Type.String({
+    minLength: 1,
+    maxLength: 200,
+  }),
+  description: Type.Optional(Type.String({
+    maxLength: 2000,
+  })),
+  priority: Type.Union([
+    Type.Literal(`low`),
+    Type.Literal(`medium`),
+    Type.Literal(`high`),
+  ], {
+    default: `medium`,
+  }),
+  completed: Type.Optional(Type.Boolean({ default: false })),
+})
+
+type CreateTodoInput = Static<typeof CreateTodoInput>
+```
+
+Key rules:
+- `Type.Optional(Type.String(...))` — wraps the inner type. Do NOT use `{ optional: true }` (TypeBox ignores it).
+- `Type.Optional(Type.Boolean(), false)` — second arg is the default value for optional fields.
+- `{ default: 'medium' }` on `Type.Union(...)` — sets default for the union via the options object.
+- Fields like `description` that are not always required use `Type.Optional()`.
+- `Value.Check()` does NOT apply defaults. Use `Value.Default(schema, data)` first.
+
+Wrong patterns (never use):
+```typescript
+// WRONG — { optional: true } is silently ignored
+Type.String({ optional: true })
+
+// WRONG — default inside type options does not make a field optional
+Type.Boolean({ default: false })
+```
+
+## File Organization for Types
+
+Each TypeBox schema goes in its own file under `src/types/`:
+- `src/types/create-todo-input.mts`
+- `src/types/update-todo-input.mts`
+- `src/types/todo-response.mts`
+- `src/types/index.mts` (barrel re-exports all)
+
+This follows the "one type per file" rule from the global standards.
+
 ## Examples
 
 ### Basic Schema Definition

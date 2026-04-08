@@ -5,7 +5,7 @@ Each task should be a self-contained unit of work that produces one or more Type
 
 ## Task Types
 - setup: Project scaffolding, config files, DI container setup
-- model: Database models, TypeBox schemas, type definitions
+- model: TypeBox schemas and type definitions — each schema in its own file under \`src/types/\` (e.g. \`src/types/create-todo-input.mts\`, \`src/types/todo-response.mts\`) with a barrel \`src/types/index.mts\`
 - repository: Data access layer classes with Result<T, E> return types
 - service: Business logic layer classes
 - middleware: Auth guards, error handlers, validators
@@ -40,7 +40,7 @@ You MUST respond with valid JSON matching this exact structure:
 ## Dependency Structure Rules (MANDATORY)
 1. There MUST be exactly ONE root task with id \`setup-foundation\`, type=setup, dependsOn=[].
 2. \`setup-foundation\` is MINIMAL: it produces ONLY src/index.mts (Elysia app + .onError() + health endpoint + .listen()), src/env.mts, and src/types/result.mts. Nothing else.
-3. Model tasks depend ONLY on \`setup-foundation\`.
+3. Model tasks depend ONLY on \`setup-foundation\`. Model tasks produce files in \`src/types/\` (one schema per file) with a barrel \`src/types/index.mts\`. Do NOT put schemas in \`src/models/\`.
 4. Repository tasks depend on \`setup-foundation\` + their corresponding model task.
 5. Service tasks depend on their corresponding repository task.
 6. Endpoint tasks depend on their corresponding service task. Endpoint tasks export Elysia plugins (not standalone apps).

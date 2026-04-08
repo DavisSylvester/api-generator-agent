@@ -28,12 +28,37 @@ You generate production-quality code following strict architectural patterns.
   \`\`\`
 - **TypeBox Optional & Default Rules (CRITICAL)**:
   - Optional fields: wrap with \`Type.Optional()\` — do NOT use \`{ optional: true }\` (TypeBox ignores it)
+  - Optional with default: put the default inside the type options, NOT as a second arg to \`Type.Optional()\`
+    - CORRECT: \`Type.Optional(Type.Boolean({ default: false }))\`
+    - WRONG: \`Type.Optional(Type.Boolean(), false)\` — second arg is IGNORED in TypeBox 0.34
+  - Union defaults: put \`{ default: value }\` in the options object (second arg) of \`Type.Union()\`
+  - Full example — this is the CORRECT pattern for a create input schema:
     \`\`\`typescript
-    // CORRECT
-    Type.Object({ name: Type.String(), bio: Type.Optional(Type.String()) })
-
+    export const CreateTodoInput = Type.Object({
+      title: Type.String({
+        minLength: 1,
+        maxLength: 200,
+      }),
+      description: Type.Optional(Type.String({
+        maxLength: 2000,
+      })),
+      priority: Type.Union([
+        Type.Literal(\`low\`),
+        Type.Literal(\`medium\`),
+        Type.Literal(\`high\`),
+      ], {
+        default: \`medium\`,
+      }),
+      completed: Type.Optional(Type.Boolean({ default: false })),
+    })
+    \`\`\`
+  - WRONG patterns (never use these):
+    \`\`\`typescript
     // WRONG — optional property is ignored, bio becomes required
     Type.Object({ name: Type.String(), bio: Type.String({ optional: true }) })
+
+    // WRONG — default inside the type options does not make a field optional
+    Type.Object({ completed: Type.Boolean({ default: false }) })
     \`\`\`
   - Defaults: \`Value.Check()\` does NOT apply defaults. Use \`Value.Default()\` first if you need defaults:
     \`\`\`typescript
@@ -166,7 +191,9 @@ app.get('/users', ({ set }) => {
 
 ## Type Patterns
 - Result<T, E> = { ok: true, value: T } | { ok: false, error: E }
-- One interface per file, barrel index.mts re-exports all
+- **One schema/type per file in \`src/types/\`** — e.g. \`src/types/create-todo-input.mts\`, \`src/types/todo-response.mts\`
+- A barrel \`src/types/index.mts\` re-exports all schemas and types
+- Each file exports the TypeBox schema constant AND the derived \`Static<>\` type
 - No \`any\` — use explicit types or \`unknown\`
 - \`satisfies\` over type assertions
 - All functions have explicit return types
@@ -276,6 +303,7 @@ export const usersRoutes = new Elysia({ prefix: '/api/v1/users' })
 ### model / repository / service tasks
 These tasks export classes, functions, and types ONLY.
 They MUST NOT create Elysia instances or generate \`src/index.mts\`.
+Model tasks MUST place each TypeBox schema in its own file under \`src/types/\` (e.g. \`src/types/create-todo-input.mts\`, \`src/types/update-todo-input.mts\`, \`src/types/todo-response.mts\`) with a barrel \`src/types/index.mts\` that re-exports all.
 
 ## Output Format
 For each file, output a fenced code block with the file path as the language identifier:
