@@ -31,6 +31,7 @@ export interface QaInput {
   readonly mode: 'generate' | 'runOnly';
   readonly port: number;
   readonly testScope?: 'unit-only' | 'full';
+  readonly availableExports?: readonly string[];
 }
 
 export interface TestPhaseResult {
@@ -62,6 +63,7 @@ export class QaAgent extends BaseAgent<QaInput, QaResult> {
     const {
       taskId, taskName, taskDescription, taskType, codeFiles,
       testsDir, codeDir, integrationDir, knowledgePath, mode, port,
+      availableExports,
     } = input.payload;
 
     const knowledge = await readKnowledge(knowledgePath);
@@ -91,7 +93,7 @@ export class QaAgent extends BaseAgent<QaInput, QaResult> {
       // Generate unit tests
       const unitMessages = [
         new SystemMessage(QA_SYSTEM_PROMPT),
-        new HumanMessage(createQaUserPrompt(taskName, taskDescription, codeStr, knowledge, taskType)),
+        new HumanMessage(createQaUserPrompt(taskName, taskDescription, codeStr, knowledge, taskType, availableExports)),
       ];
 
       this.logger.info('[qa] Sending code to LLM for unit test generation (streaming)');

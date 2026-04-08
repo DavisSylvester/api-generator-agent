@@ -121,6 +121,7 @@ export function createQaUserPrompt(
   code: string,
   knowledge?: string,
   taskType?: string,
+  availableExports?: readonly string[],
 ): string {
   const knowledgeSection = knowledge && knowledge.trim().length > 0
     ? `\n## Learnings from Previous Test Runs\nThe following knowledge was accumulated from prior test failures. Apply these lessons to avoid repeating the same mistakes:\n\n${knowledge}\n`
@@ -128,10 +129,14 @@ export function createQaUserPrompt(
 
   const taskTypeSection = getTaskTypeTestInstructions(taskType);
 
+  const exportsSection = availableExports && availableExports.length > 0
+    ? `\n## Available Exports (ONLY import from this list)\nThe following names are exported by the generated code. Do NOT import any name that is not in this list.\n\n${availableExports.map((e) => `- ${e}`).join('\n')}\n`
+    : ``;
+
   return `## Task Under Test: ${taskName}
 
 ${taskDescription}
-${taskTypeSection}${knowledgeSection}
+${taskTypeSection}${knowledgeSection}${exportsSection}
 ## Implementation Code
 ${code}
 

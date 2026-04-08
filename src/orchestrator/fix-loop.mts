@@ -13,6 +13,7 @@ import { CODEGEN_SYSTEM_PROMPT } from '../prompts/codegen-system-prompt.mts';
 import { createCodegenUserPrompt } from '../prompts/create-codegen-user-prompt.mts';
 import { createFixPrompt } from '../prompts/create-fix-prompt.mts';
 import { validateImports } from '../validators/import-validator.mts';
+import { extractExports } from '../validators/extract-exports.mts';
 
 export interface FixLoopConfig {
   readonly maxIterations: number;
@@ -265,6 +266,16 @@ export async function runFixLoop(
     const qaMode = testsGenerated ? 'runOnly' : 'generate';
     logger.info(`[fix-loop] Step 3/3: QA (${qaMode} mode, iteration ${iteration + 1})`);
 
+    // Extract available exports from generated + dependency code so QA only imports real names
+    const allCodeForExports = [...codeFiles, ...depCodeFiles];
+    const exportInfos = extractExports(allCodeForExports);
+    const availableExports = exportInfos.map((e) =>
+      e.kind === 'type' || e.kind === 'interface'
+        ? `${e.kind} ${e.name} (from ${e.file})`
+        : `${e.name} (from ${e.file})`,
+    );
+    logger.info(`[fix-loop] Extracted ${exportInfos.length} exports for QA constraint`);
+
     const qaStartMs = performance.now();
     const qaInput: AgentInput<QaInput> = {
       runId,
@@ -282,6 +293,7 @@ export async function runFixLoop(
         mode: qaMode,
         port: config.integrationPort,
         testScope: `unit-only`,
+        availableExports,
       },
       iteration,
     };
