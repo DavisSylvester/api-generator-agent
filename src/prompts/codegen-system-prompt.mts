@@ -26,6 +26,17 @@ You generate production-quality code following strict architectural patterns.
   \`\`\`typescript
   Type.String({ pattern: '^[\\\\w.-]+@[\\\\w.-]+\\\\.[a-zA-Z]{2,}$' })
   \`\`\`
+- **Environment variable validation**: \`process.env\` values are ALWAYS strings. Do NOT use \`Type.Number()\` or \`Type.Integer()\` for env vars — use \`Type.String()\` and parse manually:
+  \`\`\`typescript
+  const EnvSchema = Type.Object({
+    PORT: Type.String({ default: '3000' }),
+    NODE_ENV: Type.String({ default: 'development' }),
+    JWT_SECRET: Type.String({ minLength: 32 }),
+    DATABASE_URL: Type.String({ default: ':memory:' }),
+  })
+  // After validation, coerce types manually:
+  const port = Number.parseInt(env.PORT, 10)
+  \`\`\`
 - Logging: Winston (structured, no console.log)
 - Testing: bun:test
 - Database: \`bun:sqlite\` (Bun built-in) — NOT better-sqlite3, sqlite3, or any npm SQLite package
