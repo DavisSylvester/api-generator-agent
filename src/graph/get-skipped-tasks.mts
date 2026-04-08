@@ -7,7 +7,9 @@ export function getSkippedTasks(
   const skipped: Task[] = [];
   for (const task of graph.tasks) {
     if (failed.has(task.id)) continue;
-    if (task.dependsOn.some((dep) => failed.has(dep))) {
+    // Only skip tasks whose dependency on setup-foundation failed.
+    // Other failed deps are allowed (best-effort execution).
+    if (task.dependsOn.some((dep) => dep === `setup-foundation` && failed.has(dep))) {
       skipped.push(task);
     }
   }

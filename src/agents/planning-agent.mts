@@ -1,4 +1,4 @@
-import type { ChatOllama } from '@langchain/ollama';
+import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import type { Logger } from 'winston';
 import { z } from 'zod';
@@ -10,6 +10,7 @@ import { ok, err } from '../types/result.mts';
 import type { ModelChainConfig } from '../config/models.mts';
 import type { OllamaFactory } from '../llm/ollama-factory.mts';
 import { PLANNING_SYSTEM_PROMPT, createPlanningUserPrompt } from '../prompts/planning.mts';
+import { streamInvoke } from '../llm/stream-invoke.mts';
 
 const taskSchema = z.object({
   id: z.string(),
@@ -26,13 +27,13 @@ const planResponseSchema = z.object({
 
 export class PlanningAgent extends BaseAgent<string, TaskGraph> {
 
-  constructor(modelChain: ModelChainConfig, ollamaFactory: OllamaFactory, logger: Logger, timeoutMs?: number) {
-    super('planning', modelChain, ollamaFactory, logger, timeoutMs);
+  constructor(modelChain: ModelChainConfig, llmFactory: OllamaFactory, logger: Logger, timeoutMs?: number) {
+    super('planning', modelChain, llmFactory, logger, timeoutMs);
   }
 
   protected async execute(
     input: AgentInput<string>,
-    chatModel: ChatOllama,
+    chatModel: BaseChatModel,
     traceConfig: Record<string, unknown>,
   ): Promise<Result<TaskGraph, Error>> {
     this.logger.info(`[planning] Generating task graph from PRD (${input.payload.length} chars)`);
@@ -42,32 +43,60 @@ export class PlanningAgent extends BaseAgent<string, TaskGraph> {
       new HumanMessage(createPlanningUserPrompt(input.payload)),
     ];
 
-    this.logger.info('[planning] Sending PRD to LLM for task decomposition');
-    const response = await chatModel.invoke(messages, traceConfig);
-    const content = typeof response.content === 'string'
-      ? response.content
-      : JSON.stringify(response.content);
+    this.logger.info('[planning] Sending PRD to LLM for task decomposition (streaming)');
+    const content = await streamInvoke(chatModel, messages, traceConfig);
 
     this.logger.debug(`[planning] LLM response received (${content.length} chars)`);
 
-    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    // Strip markdown code fences if present (Claude wraps JSON in ```json ... ```)
+    let cleanedContent = content;
+    // Try greedy match for fenced blocks (handles large JSON that may contain nested backticks)
+    const fencedJson = /```(?:json)?\s*\n([\s\S]+)```/.exec(content);
+    if (fencedJson?.[1]) {
+      cleanedContent = fencedJson[1].trim();
+    }
+    // Also try stripping fence markers directly if regex didn't match (e.g. no closing fence)
+    if (cleanedContent.startsWith(`\`\`\``)) {
+      cleanedContent = cleanedContent.replace(/^```(?:json)?\s*\n?/, ``).replace(/```\s*$/, ``).trim();
+    }
+
+    const jsonMatch = cleanedContent.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
-      this.logger.warn('[planning] No JSON object found in LLM response');
-      return err(new Error('No JSON object found in planning response'));
+      this.logger.warn(`[planning] No JSON object found in LLM response`);
+      this.logger.warn(`[planning] Response (first 500 chars): ${content.substring(0, 500)}`);
+      return err(new Error(`No JSON object found in planning response`));
     }
 
     let parsed: unknown;
     try {
       parsed = JSON.parse(jsonMatch[0]);
-    } catch {
-      this.logger.warn('[planning] Failed to parse LLM response as JSON');
-      return err(new Error('Failed to parse planning response as JSON'));
+    } catch (firstError) {
+      // Try to repair common JSON issues: control chars in strings, trailing commas
+      try {
+        const repaired = jsonMatch[0]
+          .replace(/[\x00-\x1f]/g, (ch) => ch === `\n` ? `\\n` : ch === `\t` ? `\\t` : ch === `\r` ? `` : ` `)
+          .replace(/,\s*([}\]])/g, `$1`);
+        parsed = JSON.parse(repaired);
+        this.logger.info(`[planning] JSON repaired successfully after initial parse failure`);
+      } catch (repairError) {
+        this.logger.warn(`[planning] Failed to parse LLM response as JSON: ${firstError instanceof Error ? firstError.message : String(firstError)}`);
+        this.logger.warn(`[planning] Extracted JSON (first 500 chars): ${jsonMatch[0].substring(0, 500)}`);
+        return err(new Error(`Failed to parse planning response as JSON`));
+      }
     }
 
     const validation = planResponseSchema.safeParse(parsed);
     if (!validation.success) {
       this.logger.warn(`[planning] Task graph validation failed: ${validation.error.message}`);
       return err(new Error(`Invalid task graph: ${validation.error.message}`));
+    }
+
+    // Post-check: verify exactly one task has dependsOn=[] and warn if it's not setup-foundation
+    const rootTasks = validation.data.tasks.filter((t) => t.dependsOn.length === 0);
+    if (rootTasks.length !== 1) {
+      this.logger.warn(`[planning] Expected exactly 1 root task (dependsOn=[]), found ${rootTasks.length}: ${rootTasks.map((t) => t.id).join(`, `)}`);
+    } else if (rootTasks[0]?.id !== `setup-foundation`) {
+      this.logger.warn(`[planning] Root task id is "${rootTasks[0]?.id}" — expected "setup-foundation"`);
     }
 
     const hasher = new Bun.CryptoHasher('sha256');

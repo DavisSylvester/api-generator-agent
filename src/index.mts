@@ -8,21 +8,19 @@ async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const prdPath = args[0];
   const maxIterations = args[1] ? parseInt(args[1], 10) : undefined;
+  const maxTasks = args[2] ? parseInt(args[2], 10) : undefined;
 
   if (!prdPath) {
-    console.error('Usage: bun run src/index.mts <prd-file> [max-iterations]');
+    console.error('Usage: bun run src/index.mts <prd-file> [max-iterations] [max-tasks]');
     console.error('');
     console.error('Arguments:');
     console.error('  prd-file         Path to the PRD markdown/text file');
     console.error('  max-iterations   Max fix loop iterations (default: 5)');
+    console.error('  max-tasks        Max tasks to run (default: all)');
     process.exit(1);
   }
 
   const env = loadEnv();
-
-  if (maxIterations !== undefined && !isNaN(maxIterations)) {
-    (env as { MAX_FIX_ITERATIONS: number }).MAX_FIX_ITERATIONS = maxIterations;
-  }
 
   const container = createContainer(env);
   const { logger, pipelineConfig } = container;
@@ -41,11 +39,16 @@ async function main(): Promise<void> {
 
   logger.info(`PRD loaded (${prdText.length} chars)`);
   logger.info(`Config: maxIterations=${pipelineConfig.maxFixIterations}, concurrency=${pipelineConfig.maxConcurrency}`);
-  logger.info(`Ollama host: ${pipelineConfig.ollamaHost}`);
+  logger.info(`LLM provider: Ollama (${pipelineConfig.ollamaHost})`);
 
-  const effectiveConfig = maxIterations !== undefined && !isNaN(maxIterations)
+  let effectiveConfig = maxIterations !== undefined && !isNaN(maxIterations)
     ? { ...pipelineConfig, maxFixIterations: maxIterations }
-    : pipelineConfig;
+    : { ...pipelineConfig };
+
+  if (maxTasks !== undefined && !isNaN(maxTasks)) {
+    effectiveConfig = { ...effectiveConfig, maxTasks };
+    logger.info(`Max tasks: ${maxTasks}`);
+  }
 
   const result = await runPipeline(prdText, effectiveConfig, {
     planningAgent: container.planningAgent,

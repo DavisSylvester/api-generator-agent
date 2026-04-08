@@ -13,7 +13,8 @@ import { DocumentationAgent } from '../agents/documentation-agent.mts';
 export interface Container {
 
   readonly logger: Logger;
-  readonly ollamaFactory: OllamaFactory;
+  readonly localFactory: OllamaFactory;
+  readonly codegenFactory: OllamaFactory;
   readonly planningAgent: PlanningAgent;
   readonly codegenAgent: CodegenAgent;
   readonly eslintAgent: EslintAgent;
@@ -45,21 +46,29 @@ export function createContainer(env: EnvConfig): Container {
     ],
   });
 
-  const ollamaFactory = new OllamaFactory({ host: env.OLLAMA_HOST });
+  // Local Ollama for planning, QA, docs (qwen3.5:27b)
+  const localFactory = new OllamaFactory({ host: env.OLLAMA_HOST });
+  logger.info(`Local Ollama: ${env.OLLAMA_HOST}`);
+
+  // Cloud Ollama for codegen (qwen3-coder-next) — falls back to local if no API key
+  const codegenFactory = env.OLLAMA_API_KEY
+    ? new OllamaFactory({ host: `https://api.ollama.com`, apiKey: env.OLLAMA_API_KEY })
+    : localFactory;
+  logger.info(`Codegen Ollama: ${env.OLLAMA_API_KEY ? `https://api.ollama.com (cloud)` : `${env.OLLAMA_HOST} (local)`}`);
 
   const timeoutMs = env.LLM_TIMEOUT_MS;
   logger.info(`LLM timeout set to ${Math.round(timeoutMs / 1000)}s`);
 
   const planningAgent = new PlanningAgent(
     MODEL_CHAINS.planning,
-    ollamaFactory,
+    localFactory,
     logger,
     timeoutMs,
   );
 
   const codegenAgent = new CodegenAgent(
     MODEL_CHAINS.codegen,
-    ollamaFactory,
+    codegenFactory,
     logger,
     timeoutMs,
   );
@@ -68,14 +77,14 @@ export function createContainer(env: EnvConfig): Container {
 
   const qaAgent = new QaAgent(
     MODEL_CHAINS.qa,
-    ollamaFactory,
+    localFactory,
     logger,
     timeoutMs,
   );
 
   const documentationAgent = new DocumentationAgent(
     MODEL_CHAINS.documentation,
-    ollamaFactory,
+    localFactory,
     logger,
     timeoutMs,
   );
@@ -85,11 +94,13 @@ export function createContainer(env: EnvConfig): Container {
     maxConcurrency: env.MAX_CONCURRENCY,
     workspaceDir: env.WORKSPACE_DIR,
     ollamaHost: env.OLLAMA_HOST,
+    integrationPort: env.INTEGRATION_PORT,
   };
 
   return {
     logger,
-    ollamaFactory,
+    localFactory,
+    codegenFactory,
     planningAgent,
     codegenAgent,
     eslintAgent,

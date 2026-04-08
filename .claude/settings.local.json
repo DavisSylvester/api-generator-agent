@@ -23,7 +23,16 @@
       "Bash(npx @langchain/langgraph-cli dev --no-browser --port 2024)",
       "Bash(curl:*)",
       "Bash(npx playwright:*)",
-      "Bash(rm:*)"
+      "Bash(rm:*)",
+      "Bash(bun test:*)",
+      "Bash(echo \"EXIT: $?\")",
+      "Bash(bun build:*)",
+      "Bash(npx tsc:*)",
+      "Bash(bun:*)",
+      "Bash(ls *.md)",
+      "Bash(ls *.txt)",
+      "Bash(ls prd*)",
+      "Bash(ls test-prd*)"
     ]
   }
 }

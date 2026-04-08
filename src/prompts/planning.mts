@@ -5,11 +5,11 @@ Each task should be a self-contained unit of work that produces one or more Type
 
 ## Task Types
 - setup: Project scaffolding, config files, DI container setup
-- model: Database models, Zod schemas, type definitions
+- model: Database models, TypeBox schemas, type definitions
 - repository: Data access layer classes with Result<T, E> return types
 - service: Business logic layer classes
 - middleware: Auth guards, error handlers, validators
-- endpoint: Elysia route handlers (controllers)
+- endpoint: Elysia route handlers (controllers) — export Elysia plugins, NOT standalone apps
 
 ## Architecture Rules
 - All code uses strict TypeScript with .mts extensions
@@ -17,7 +17,7 @@ Each task should be a self-contained unit of work that produces one or more Type
 - Dependency injection for all services/repositories
 - Repository pattern: all DB access through repos, repos return Result<T, E>
 - Controllers handle HTTP only, services handle business logic
-- Zod for all validation (body, query, params)
+- TypeBox (@sinclair/typebox) for all validation (body, query, params) — Elysia's native validation library
 - Winston for structured logging
 - Every endpoint under /api/v1
 
@@ -31,18 +31,30 @@ You MUST respond with valid JSON matching this exact structure:
       "description": "Detailed description of what to implement, including file paths and interfaces",
       "dependsOn": ["id-of-dependency"],
       "type": "setup|model|endpoint|middleware|service|repository",
+      "filePaths": ["src/models/user.mts", "src/types/user.mts"],
       "metadata": {}
     }
   ]
 }
 
+## Dependency Structure Rules (MANDATORY)
+1. There MUST be exactly ONE root task with id \`setup-foundation\`, type=setup, dependsOn=[].
+2. \`setup-foundation\` is MINIMAL: it produces ONLY src/index.mts (Elysia app + .onError() + health endpoint + .listen()), src/env.mts, and src/types/result.mts. Nothing else.
+3. Model tasks depend ONLY on \`setup-foundation\`.
+4. Repository tasks depend on \`setup-foundation\` + their corresponding model task.
+5. Service tasks depend on their corresponding repository task.
+6. Endpoint tasks depend on their corresponding service task. Endpoint tasks export Elysia plugins (not standalone apps).
+7. Maximum dependency depth is 4 (setup -> model/repo -> service -> endpoint).
+8. NO task other than \`setup-foundation\` may have an empty dependsOn array.
+9. Each task MUST include a \`filePaths\` array listing every file the task will produce.
+
 ## Rules
 - Order tasks by dependency: setup first, then models, repos, services, endpoints
-- Use descriptive IDs like "setup-di", "model-user", "repo-user", "service-auth", "endpoint-users"
+- Use descriptive IDs like "setup-foundation", "model-user", "repo-user", "service-auth", "endpoint-users"
 - Include ALL necessary tasks — don't skip validation schemas, error types, or config
 - Each task description must be specific enough for a code generation agent to implement
 - Mark dependencies explicitly — if service-auth depends on repo-user, say so
-- Tasks with no dependencies can run in parallel`;
+- Only \`setup-foundation\` has no dependencies — every other task must depend on at least \`setup-foundation\``;
 
 export function createPlanningUserPrompt(prdText: string): string {
   return `Analyze the following PRD and generate a complete task breakdown for implementing this API.

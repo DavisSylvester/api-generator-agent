@@ -1,4 +1,4 @@
-import type { ChatOllama } from '@langchain/ollama';
+import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import type { Logger } from 'winston';
 import { BaseAgent } from './base-agent.mts';
@@ -12,10 +12,12 @@ import {
   createCodegenUserPrompt,
   createFixPrompt,
 } from '../prompts/codegen.mts';
+import { streamInvoke } from '../llm/stream-invoke.mts';
 
 export interface CodegenInput {
   readonly taskName: string;
   readonly taskDescription: string;
+  readonly taskType?: string;
   readonly mode: 'generate' | 'fix';
   readonly existingCode?: string;
   readonly previousCode?: string;
@@ -31,27 +33,27 @@ export type CodegenOutput = readonly CodeFile[];
 
 export class CodegenAgent extends BaseAgent<CodegenInput, CodegenOutput> {
 
-  constructor(modelChain: ModelChainConfig, ollamaFactory: OllamaFactory, logger: Logger, timeoutMs?: number) {
-    super('codegen', modelChain, ollamaFactory, logger, timeoutMs);
+  constructor(modelChain: ModelChainConfig, llmFactory: OllamaFactory, logger: Logger, timeoutMs?: number) {
+    super('codegen', modelChain, llmFactory, logger, timeoutMs);
   }
 
   protected async execute(
     input: AgentInput<CodegenInput>,
-    chatModel: ChatOllama,
+    chatModel: BaseChatModel,
     traceConfig: Record<string, unknown>,
   ): Promise<Result<CodegenOutput, Error>> {
-    const { taskName, taskDescription, mode, existingCode, previousCode, errors } = input.payload;
+    const { taskName, taskDescription, taskType, mode, existingCode, previousCode, errors } = input.payload;
 
-    this.logger.info(`[codegen] Task: "${taskName}" | Mode: ${mode} | Iteration: ${input.iteration}`);
+    this.logger.info(`[codegen] Task: "${taskName}" | Type: ${taskType ?? `unknown`} | Mode: ${mode} | Iteration: ${input.iteration}`);
     if (mode === 'fix' && errors) {
       this.logger.info(`[codegen] Fixing ${errors.length} errors from previous iteration`);
     }
 
     let userPrompt: string;
     if (mode === 'fix' && previousCode && errors) {
-      userPrompt = createFixPrompt(taskName, taskDescription, previousCode, errors);
+      userPrompt = createFixPrompt(taskName, taskDescription, previousCode, errors, taskType, existingCode);
     } else {
-      userPrompt = createCodegenUserPrompt(taskName, taskDescription, existingCode);
+      userPrompt = createCodegenUserPrompt(taskName, taskDescription, existingCode, taskType);
     }
 
     const messages = [
@@ -59,45 +61,74 @@ export class CodegenAgent extends BaseAgent<CodegenInput, CodegenOutput> {
       new HumanMessage(userPrompt),
     ];
 
-    this.logger.info(`[codegen] Sending prompt to LLM (${userPrompt.length} chars)`);
-    const response = await chatModel.invoke(messages, traceConfig);
-    const content = typeof response.content === 'string'
-      ? response.content
-      : JSON.stringify(response.content);
+    this.logger.info(`[codegen] Sending prompt to LLM (${userPrompt.length} chars) (streaming)`);
+    const content = await streamInvoke(chatModel, messages, traceConfig);
 
     this.logger.debug(`[codegen] LLM response received (${content.length} chars)`);
 
-    const files = parseCodeBlocks(content);
+    const rawFiles = parseCodeBlocks(content);
 
-    if (files.length === 0) {
+    // Deduplicate files — keep first occurrence when LLM emits the same path twice
+    const seen = new Set<string>();
+    const files = rawFiles.filter((f) => {
+      if (seen.has(f.path)) {
+        this.logger.warn(`[codegen] Duplicate file path "${f.path}", keeping first occurrence`);
+        return false;
+      }
+      seen.add(f.path);
+      return true;
+    });
+
+    const sanitized = sanitizeCodeFiles(files, this.logger);
+
+    if (sanitized.length === 0) {
       this.logger.warn('[codegen] No code blocks found in LLM response');
       this.logger.warn(`[codegen] Raw response (first 500 chars): ${content.substring(0, 500)}`);
       return err(new Error('No code blocks found in codegen response'));
     }
 
-    this.logger.info(`[codegen] Generated ${files.length} files:`);
-    for (const file of files) {
+    this.logger.info(`[codegen] Generated ${sanitized.length} files:`);
+    for (const file of sanitized) {
       this.logger.info(`[codegen]   - ${file.path} (${file.content.length} chars)`);
     }
 
-    return ok(files);
+    return ok(sanitized);
   }
+}
+
+function normalizePath(path: string): string {
+  let normalized = path.trim();
+
+  // Strip leading ./ or /
+  normalized = normalized.replace(/^\.\//, ``).replace(/^\//, ``);
+
+  // Normalize backslashes to forward slashes
+  normalized = normalized.replace(/\\/g, `/`);
+
+  // Convert .ts to .mts
+  if (normalized.endsWith(`.ts`) && !normalized.endsWith(`.mts`)) {
+    normalized = normalized.replace(/\.ts$/, `.mts`);
+  }
+
+  // Collapse ANY number of repeated src/ prefixes: src/src/src/... → src/...
+  while (normalized.startsWith(`src/src/`)) {
+    normalized = normalized.replace(`src/src/`, `src/`);
+  }
+
+  return normalized;
 }
 
 function parseCodeBlocks(content: string): CodeFile[] {
   const files: CodeFile[] = [];
 
-  // Try: ```path/to/file.mts or ```path/to/file.ts
-  const pathRegex = /```([^\n]+\.(?:mts|ts))\n([\s\S]*?)```/g;
+  // Try: ```path/to/file.mts, .ts, .json, .toml, etc.
+  const pathRegex = /```([^\n]+\.(?:mts|ts|json|toml|mjs))\n([\s\S]*?)```/g;
   let match: RegExpExecArray | null;
   while ((match = pathRegex.exec(content)) !== null) {
     const path = match[1]?.trim();
     const code = match[2]?.trim();
     if (path && code) {
-      const normalizedPath = path.endsWith('.ts') && !path.endsWith('.mts')
-        ? path.replace(/\.ts$/, '.mts')
-        : path;
-      files.push({ path: normalizedPath, content: code });
+      files.push({ path: normalizePath(path), content: code });
     }
   }
 
@@ -116,4 +147,30 @@ function parseCodeBlocks(content: string): CodeFile[] {
   }
 
   return files;
+}
+
+function sanitizeCodeFiles(files: readonly CodeFile[], logger: Logger): CodeFile[] {
+  const forbiddenPattern = /^import\s+(?:['"]reflect-metadata['"]|.*from\s+['"](?:tsyringe|inversify|typedi|awilix)['"]).*$/gm;
+  const importTypePattern = /^import\s+type\s+/gm;
+
+  return files.map((file) => {
+    let content = file.content;
+
+    const blockedContent = content.replace(forbiddenPattern, (match) => `// [blocked] ${match}`);
+    if (blockedContent !== content) {
+      logger.warn(`[codegen] Commented out forbidden DI framework imports in ${file.path}`);
+      content = blockedContent;
+    }
+
+    if (importTypePattern.test(content)) {
+      content = content.replace(/^import\s+type\s+/gm, `import `);
+      logger.warn(`[codegen] Converted import type → import in ${file.path}`);
+    }
+
+    if (content !== file.content) {
+      return { path: file.path, content };
+    }
+
+    return file;
+  });
 }

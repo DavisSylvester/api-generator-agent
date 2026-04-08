@@ -21,7 +21,7 @@ const SYSTEM_PROMPT = `You are an expert software architect and project planner.
 Analyze the PRD and break it down into discrete tasks for building an Elysia API with BunJS.
 
 Task types: setup, model, repository, service, middleware, endpoint.
-Architecture: strict TypeScript, .mts extensions, DI, repositories return Result<T,E>, Zod validation.
+Architecture: strict TypeScript, .mts extensions, DI, repositories return Result<T,E>, TypeBox validation (@sinclair/typebox).
 
 Respond with valid JSON: { "tasks": [{ "id", "name", "description", "dependsOn": [], "type", "metadata": {} }] }
 Order by dependency. Use IDs like "setup-di", "model-user", "repo-user", "service-auth", "endpoint-users".`;

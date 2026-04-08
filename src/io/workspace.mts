@@ -16,6 +16,8 @@ export class Workspace {
   public async init(): Promise<void> {
     await mkdir(this.root, { recursive: true });
     await mkdir(this.docsDir(), { recursive: true });
+    await mkdir(join(this.root, 'logs'), { recursive: true });
+    await mkdir(this.outputDir(), { recursive: true });
   }
 
   public async initTask(taskId: string): Promise<void> {
@@ -24,6 +26,7 @@ export class Workspace {
       mkdir(join(taskDir, 'code'), { recursive: true }),
       mkdir(join(taskDir, 'code-linted'), { recursive: true }),
       mkdir(join(taskDir, 'tests'), { recursive: true }),
+      mkdir(join(taskDir, 'integration'), { recursive: true }),
       mkdir(join(taskDir, 'iterations'), { recursive: true }),
     ]);
   }
@@ -41,6 +44,10 @@ export class Workspace {
 
   public iterationDir(taskId: string, iteration: number): string {
     return join(this.taskDir(taskId), 'iterations', String(iteration));
+  }
+
+  public outputDir(): string {
+    return join(this.root, 'output');
   }
 
   public docsDir(): string {
@@ -71,7 +78,35 @@ export class Workspace {
     return join(this.taskDir(taskId), 'status.json');
   }
 
+  public taskIntegrationDir(taskId: string): string {
+    return join(this.taskDir(taskId), 'integration');
+  }
+
+  public taskHoppscotchCollectionPath(taskId: string): string {
+    return join(this.taskIntegrationDir(taskId), 'collection.json');
+  }
+
+  public taskIntegrationResultsPath(taskId: string): string {
+    return join(this.taskDir(taskId), 'integration-results.json');
+  }
+
   public hoppscotchPath(): string {
     return join(this.docsDir(), 'hoppscotch-collection.json');
+  }
+
+  public runLogPath(): string {
+    return join(this.root, 'logs', 'run.log');
+  }
+
+  public iterationLogPath(taskId: string, iteration: number): string {
+    return join(this.iterationDir(taskId, iteration), 'iteration.log');
+  }
+
+  public qaKnowledgePath(): string {
+    return join(this.root, `qa-knowledge.md`);
+  }
+
+  public taskQaKnowledgePath(taskId: string): string {
+    return join(this.taskDir(taskId), `qa-knowledge.md`);
   }
 }

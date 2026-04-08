@@ -19,7 +19,7 @@ const THINKING_PHRASES: readonly string[] = [
   'Inspecting data flow',
   'Deliberating middleware logic',
   'Pondering DI container setup',
-  'Crafting Zod validators',
+  'Crafting TypeBox validators',
   'Wiring controller responses',
   'Structuring test scenarios',
   'Reviewing type safety',

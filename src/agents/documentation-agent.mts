@@ -1,4 +1,4 @@
-import type { ChatOllama } from '@langchain/ollama';
+import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import type { Logger } from 'winston';
 import { BaseAgent } from './base-agent.mts';
@@ -11,6 +11,7 @@ import {
   DOCUMENTATION_SYSTEM_PROMPT,
   createDocumentationUserPrompt,
 } from '../prompts/documentation.mts';
+import { streamInvoke } from '../llm/stream-invoke.mts';
 
 export interface HoppscotchCollection {
   readonly v: number;
@@ -21,13 +22,13 @@ export interface HoppscotchCollection {
 
 export class DocumentationAgent extends BaseAgent<string, HoppscotchCollection> {
 
-  constructor(modelChain: ModelChainConfig, ollamaFactory: OllamaFactory, logger: Logger, timeoutMs?: number) {
-    super('documentation', modelChain, ollamaFactory, logger, timeoutMs);
+  constructor(modelChain: ModelChainConfig, llmFactory: OllamaFactory, logger: Logger, timeoutMs?: number) {
+    super('documentation', modelChain, llmFactory, logger, timeoutMs);
   }
 
   protected async execute(
     input: AgentInput<string>,
-    chatModel: ChatOllama,
+    chatModel: BaseChatModel,
     traceConfig: Record<string, unknown>,
   ): Promise<Result<HoppscotchCollection, Error>> {
     this.logger.info(`[docs] Generating Hoppscotch collection from ${input.payload.length} chars of code`);
@@ -37,11 +38,8 @@ export class DocumentationAgent extends BaseAgent<string, HoppscotchCollection> 
       new HumanMessage(createDocumentationUserPrompt(input.payload)),
     ];
 
-    this.logger.info('[docs] Sending code to LLM for documentation generation');
-    const response = await chatModel.invoke(messages, traceConfig);
-    const content = typeof response.content === 'string'
-      ? response.content
-      : JSON.stringify(response.content);
+    this.logger.info('[docs] Sending code to LLM for documentation generation (streaming)');
+    const content = await streamInvoke(chatModel, messages, traceConfig);
 
     this.logger.debug(`[docs] LLM response received (${content.length} chars)`);
 

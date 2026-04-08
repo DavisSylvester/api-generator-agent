@@ -16,6 +16,25 @@ export class EslintAgent {
   public async run(files: readonly CodeFile[], workDir: string): Promise<Result<readonly CodeFile[], Error>> {
     this.logger.info(`[eslint] Starting lint pass on ${files.length} files`);
     const startMs = performance.now();
+
+    // Write minimal ESLint flat config to the workspace
+    const eslintConfigContent = [
+      `export default [`,
+      `  {`,
+      `    rules: {`,
+      `      "no-console": "error",`,
+      `      "prefer-const": "error",`,
+      `      "no-var": "error",`,
+      `      "eqeqeq": "error",`,
+      `      "curly": "error",`,
+      `    },`,
+      `  },`,
+      `];`,
+      ``,
+    ].join(`\n`);
+
+    await writeFile(join(workDir, `eslint.config.mjs`), eslintConfigContent, `utf-8`);
+
     const linted: CodeFile[] = [];
     let successCount = 0;
     let failCount = 0;

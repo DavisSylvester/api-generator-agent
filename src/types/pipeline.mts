@@ -5,6 +5,8 @@ export interface PipelineConfig {
   readonly maxConcurrency: number;
   readonly workspaceDir: string;
   readonly ollamaHost: string;
+  readonly maxTasks?: number;
+  readonly integrationPort: number;
 }
 
 export interface PipelineResult {

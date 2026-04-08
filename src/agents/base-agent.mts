@@ -1,10 +1,10 @@
-import type { ChatOllama } from '@langchain/ollama';
+import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import type { Logger } from 'winston';
 import type { AgentInput, AgentOutput } from '../types/agent-context.mts';
 import type { Result } from '../types/result.mts';
 import { ok, err } from '../types/result.mts';
 import type { AgentRole, ModelChainConfig } from '../config/models.mts';
-import { OllamaFactory } from '../llm/ollama-factory.mts';
+import type { OllamaFactory } from '../llm/ollama-factory.mts';
 import { createTraceConfig } from '../llm/tracing.mts';
 import { ThinkingSpinner } from '../llm/thinking-spinner.mts';
 import { withTimeout, LlmTimeoutError } from '../llm/with-timeout.mts';
@@ -13,31 +13,36 @@ export abstract class BaseAgent<TIn, TOut> {
 
   protected readonly role: AgentRole;
   protected readonly modelChain: ModelChainConfig;
-  protected readonly ollamaFactory: OllamaFactory;
+  protected readonly llmFactory: OllamaFactory;
   protected readonly logger: Logger;
   protected readonly timeoutMs: number;
+  protected readonly useThinking: boolean;
 
   constructor(
     role: AgentRole,
     modelChain: ModelChainConfig,
-    ollamaFactory: OllamaFactory,
+    llmFactory: OllamaFactory,
     logger: Logger,
     timeoutMs: number = 1800000,
+    useThinking: boolean = false,
   ) {
     this.role = role;
     this.modelChain = modelChain;
-    this.ollamaFactory = ollamaFactory;
+    this.llmFactory = llmFactory;
     this.logger = logger;
     this.timeoutMs = timeoutMs;
+    this.useThinking = useThinking;
   }
 
   public async run(input: AgentInput<TIn>): Promise<Result<AgentOutput<TOut>, Error>> {
     const errors: string[] = [];
 
     for (const model of this.modelChain.models) {
-      this.logger.info(`[${this.role}] Trying model: ${model}`);
+      this.logger.info(`[${this.role}] Trying model: ${model} (thinking: ${this.useThinking})`);
 
-      const chatModel = this.ollamaFactory.create(model, this.modelChain.temperature);
+      const chatModel = this.useThinking
+        ? this.llmFactory.createWithThinking(model, this.modelChain.temperature)
+        : this.llmFactory.create(model, this.modelChain.temperature);
       const traceConfig = createTraceConfig({
         runId: input.runId,
         agentRole: this.role,
@@ -95,7 +100,7 @@ export abstract class BaseAgent<TIn, TOut> {
 
   protected abstract execute(
     input: AgentInput<TIn>,
-    chatModel: ChatOllama,
+    chatModel: BaseChatModel,
     traceConfig: Record<string, unknown>,
   ): Promise<Result<TOut, Error>>;
 }

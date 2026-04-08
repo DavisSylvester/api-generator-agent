@@ -1,6 +1,5 @@
 import type { Task, TaskGraph, TaskState } from '../types/task.mts';
 import type { Result } from '../types/result.mts';
-import { ok, err } from '../types/result.mts';
 import { getReadyTasks, getSkippedTasks } from './task-graph.mts';
 import type { Logger } from 'winston';
 
@@ -17,21 +16,24 @@ export async function executeGraph(
   logger: Logger,
 ): Promise<Map<string, TaskState>> {
   const completed = new Set<string>();
-  const running = new Set<string>();
   const failed = new Set<string>();
   const results = new Map<string, TaskState>();
 
   const totalTasks = graph.tasks.length;
 
+  // Map of taskId → in-flight promise (resolves when that task finishes)
+  const inFlight = new Map<string, Promise<string>>();
+
   while (completed.size + failed.size < totalTasks) {
+    // Mark skipped tasks (dependencies failed)
     const skipped = getSkippedTasks(graph, failed);
     for (const task of skipped) {
       if (!results.has(task.id)) {
         const state: TaskState = {
           taskId: task.id,
-          status: 'skipped',
+          status: `skipped`,
           iteration: 0,
-          lastError: 'Dependency failed',
+          lastError: `Dependency failed`,
         };
         results.set(task.id, state);
         failed.add(task.id);
@@ -39,61 +41,61 @@ export async function executeGraph(
       }
     }
 
+    // Determine which tasks are ready (deps completed, not running/done/failed)
+    const running = new Set(inFlight.keys());
     const ready = getReadyTasks(graph, completed, running, failed);
 
-    if (ready.length === 0 && running.size === 0) {
+    // If nothing ready and nothing in flight, we are stuck or done
+    if (ready.length === 0 && inFlight.size === 0) {
       break;
     }
 
-    const slotsAvailable = config.maxConcurrency - running.size;
+    // Fill available concurrency slots with ready tasks
+    const slotsAvailable = config.maxConcurrency - inFlight.size;
     const toStart = ready.slice(0, slotsAvailable);
 
-    if (toStart.length === 0 && running.size > 0) {
-      await waitForAny(running, results);
-      continue;
-    }
-
-    const promises = toStart.map(async (task) => {
-      running.add(task.id);
+    for (const task of toStart) {
       logger.info(`Starting task ${task.id} (${task.name})`);
 
-      const result = await processTask(task);
+      const promise = (async (): Promise<string> => {
+        const result = await processTask(task);
 
-      running.delete(task.id);
+        if (result.ok) {
+          const state = result.value;
+          results.set(task.id, state);
 
-      if (result.ok) {
-        const state = result.value;
-        results.set(task.id, state);
-
-        if (state.status === 'completed') {
-          completed.add(task.id);
-          logger.info(`Completed task ${task.id} (${task.name})`);
+          if (state.status === `completed`) {
+            completed.add(task.id);
+            logger.info(`Completed task ${task.id} (${task.name})`);
+          } else {
+            failed.add(task.id);
+            logger.error(`Failed task ${task.id} (${task.name}): ${state.lastError ?? `unknown`}`);
+          }
         } else {
+          const state: TaskState = {
+            taskId: task.id,
+            status: `failed`,
+            iteration: 0,
+            lastError: result.error.message,
+          };
+          results.set(task.id, state);
           failed.add(task.id);
-          logger.error(`Failed task ${task.id} (${task.name}): ${state.lastError ?? 'unknown'}`);
+          logger.error(`Failed task ${task.id} (${task.name}): ${result.error.message}`);
         }
-      } else {
-        const state: TaskState = {
-          taskId: task.id,
-          status: 'failed',
-          iteration: 0,
-          lastError: result.error.message,
-        };
-        results.set(task.id, state);
-        failed.add(task.id);
-        logger.error(`Failed task ${task.id} (${task.name}): ${result.error.message}`);
-      }
-    });
 
-    await Promise.all(promises);
+        return task.id;
+      })();
+
+      inFlight.set(task.id, promise);
+    }
+
+    // If we started new tasks but still have capacity left and no more ready tasks,
+    // or if we couldn't start anything, wait for at least one task to complete.
+    if (inFlight.size > 0) {
+      const finishedId = await Promise.race(inFlight.values());
+      inFlight.delete(finishedId);
+    }
   }
 
   return results;
-}
-
-async function waitForAny(
-  running: ReadonlySet<string>,
-  _results: Map<string, TaskState>,
-): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, 100));
 }

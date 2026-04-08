@@ -11,6 +11,8 @@
     "typescript": "^5"
   },
   "dependencies": {
+    "@hoppscotch/cli": "^0.30.3",
+    "@langchain/anthropic": "^1.3.26",
     "@langchain/core": "^1.1.39",
     "@langchain/langgraph": "^1.2.7",
     "@langchain/ollama": "^1.2.6",

@@ -2,14 +2,34 @@ import { ChatOllama } from '@langchain/ollama';
 
 export interface OllamaFactoryConfig {
   readonly host: string;
+  readonly timeoutMs?: number;
+  readonly apiKey?: string;
+}
+
+function createLongTimeoutFetch(timeoutMs: number): (input: string | URL | Request, init?: RequestInit) => Promise<Response> {
+  return (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    return fetch(input, {
+      ...init,
+      signal: controller.signal,
+    }).finally(() => clearTimeout(timer));
+  };
 }
 
 export class OllamaFactory {
 
   private readonly host: string;
+  private readonly timeoutMs: number;
+  private readonly headers: Record<string, string>;
 
   constructor(config: OllamaFactoryConfig) {
     this.host = config.host;
+    this.timeoutMs = config.timeoutMs ?? 1800000;
+    this.headers = config.apiKey
+      ? { Authorization: `Bearer ${config.apiKey}` }
+      : {};
   }
 
   public create(model: string, temperature: number): ChatOllama {
@@ -18,7 +38,26 @@ export class OllamaFactory {
       model,
       temperature,
       format: undefined,
-    });
+      keepAlive: `30m`,
+      numCtx: 8192,
+      think: false,
+      headers: this.headers,
+      fetch: createLongTimeoutFetch(this.timeoutMs),
+    } as ConstructorParameters<typeof ChatOllama>[0]);
+  }
+
+  public createWithThinking(model: string, temperature: number): ChatOllama {
+    return new ChatOllama({
+      baseUrl: this.host,
+      model,
+      temperature,
+      format: undefined,
+      keepAlive: `30m`,
+      numCtx: 8192,
+      think: true,
+      headers: this.headers,
+      fetch: createLongTimeoutFetch(this.timeoutMs),
+    } as ConstructorParameters<typeof ChatOllama>[0]);
   }
 
   public createWithJsonFormat(model: string, temperature: number): ChatOllama {
@@ -26,7 +65,12 @@ export class OllamaFactory {
       baseUrl: this.host,
       model,
       temperature,
-      format: 'json',
-    });
+      format: `json`,
+      keepAlive: `30m`,
+      numCtx: 8192,
+      think: false,
+      headers: this.headers,
+      fetch: createLongTimeoutFetch(this.timeoutMs),
+    } as ConstructorParameters<typeof ChatOllama>[0]);
   }
 }

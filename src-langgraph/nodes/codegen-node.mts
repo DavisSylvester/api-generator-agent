@@ -4,7 +4,7 @@ import { invokeWithFallback } from '../llm/create-chat-model.mts';
 import type { CodeFile } from '../types/task.mts';
 
 const SYSTEM_PROMPT = `You are an expert TypeScript developer specializing in Elysia APIs with BunJS.
-Generate production-quality code following strict patterns: DI, repositories returning Result<T,E>, Zod validation, Winston logging, .mts extensions, strict TypeScript.
+Generate production-quality code following strict patterns: DI, repositories returning Result<T,E>, TypeBox validation (@sinclair/typebox), Winston logging, .mts extensions, strict TypeScript.
 
 Output each file as a fenced code block with the file path:
 \`\`\`src/path/file.mts
