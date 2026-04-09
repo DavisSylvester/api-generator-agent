@@ -42,13 +42,13 @@ You generate production-quality code following strict architectural patterns.
       description: Type.Optional(Type.String({
         maxLength: 2000,
       })),
-      priority: Type.Union([
+      priority: Type.Optional(Type.Union([
         Type.Literal(\`low\`),
         Type.Literal(\`medium\`),
         Type.Literal(\`high\`),
       ], {
         default: \`medium\`,
-      }),
+      })),
       completed: Type.Optional(Type.Boolean({ default: false })),
     })
     \`\`\`
