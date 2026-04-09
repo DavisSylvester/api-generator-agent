@@ -58,6 +58,10 @@ export class Workspace {
     return join(this.root, 'plan.json');
   }
 
+  public planCachePath(prdHash: string): string {
+    return join(this.baseDir, '.plan-cache', `${prdHash}.json`);
+  }
+
   public taskCodeDir(taskId: string): string {
     return join(this.taskDir(taskId), 'code');
   }

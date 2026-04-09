@@ -1,14 +1,16 @@
 import winston from 'winston';
 import type { Logger } from 'winston';
-import type { TaskGraph, TaskState } from '../types/task.mts';
+import type { Task, TaskGraph, TaskState } from '../types/task.mts';
 import type { AgentInput } from '../types/agent-context.mts';
 import type { PipelineConfig, PipelineResult } from '../types/pipeline.mts';
 import type { Result } from '../types/result.mts';
 import { ok, err } from '../types/result.mts';
 import { Workspace } from '../io/workspace.mts';
-import { writeJson, readAllCodeFiles } from '../io/file-protocol.mts';
-import { access, readFile, writeFile } from 'node:fs/promises';
+import { writeJson, readJson, readAllCodeFiles } from '../io/file-protocol.mts';
+import { access, readFile, writeFile, mkdir } from 'node:fs/promises';
 import type { CodeFile } from '../agents/codegen-agent.mts';
+import { z } from 'zod';
+import { dirname } from 'node:path';
 import { validateGraph } from '../graph/task-graph.mts';
 import { executeGraph } from '../graph/parallel-executor.mts';
 import { runFixLoop } from './fix-loop.mts';
@@ -17,6 +19,19 @@ import type { CodegenAgent } from '../agents/codegen-agent.mts';
 import type { EslintAgent } from '../agents/eslint-agent.mts';
 import type { QaAgent } from '../agents/qa-agent.mts';
 import type { DocumentationAgent } from '../agents/documentation-agent.mts';
+
+const cachedTaskGraphSchema = z.object({
+  runId: z.string(),
+  prdHash: z.string(),
+  tasks: z.array(z.object({
+    id: z.string(),
+    name: z.string(),
+    description: z.string(),
+    dependsOn: z.array(z.string()).default([]),
+    type: z.enum(['setup', 'model', 'endpoint', 'middleware', 'service', 'repository']),
+    metadata: z.record(z.string(), z.unknown()).default({}),
+  })),
+});
 
 export interface PipelineDeps {
   readonly planningAgent: PlanningAgent;
@@ -66,22 +81,52 @@ export async function runPipeline(
     startedAt: new Date().toISOString(),
   });
 
-  // Phase 1: Planning
+  // Phase 1: Planning (with cache)
   logger.info(`Phase 1: Planning — generating task graph from PRD`);
-  const planInput: AgentInput<string> = {
-    runId,
-    payload: prdText,
-    iteration: 0,
-  };
 
-  const planResult = await deps.planningAgent.run(planInput);
-  if (!planResult.ok) {
-    return err(new Error(`Planning failed: ${planResult.error.message}`));
+  const prdHasher = new Bun.CryptoHasher('sha256');
+  prdHasher.update(prdText);
+  const prdHash = prdHasher.digest('hex');
+  const planCachePath = workspace.planCachePath(prdHash);
+
+  let taskGraph: TaskGraph | undefined;
+  let planFromCache = false;
+
+  // Check for cached plan
+  const cachedResult = await readJson<unknown>(planCachePath);
+  if (cachedResult.ok) {
+    const validation = cachedTaskGraphSchema.safeParse(cachedResult.value);
+    if (validation.success) {
+      taskGraph = {
+        runId,
+        prdHash: validation.data.prdHash,
+        tasks: validation.data.tasks as readonly Task[],
+      };
+      planFromCache = true;
+      logger.info(`Using cached plan for PRD hash ${prdHash} (${taskGraph.tasks.length} tasks)`);
+    } else {
+      logger.warn(`Cached plan for PRD hash ${prdHash} failed validation — regenerating`);
+    }
+  } else {
+    logger.info(`No cached plan found for PRD hash ${prdHash}, generating...`);
   }
 
-  let taskGraph: TaskGraph = planResult.value.payload;
-  const planDurationMs = Math.round(performance.now() - startMs);
-  logger.info(`Planning complete: ${taskGraph.tasks.length} tasks generated in ${planDurationMs}ms (model: ${planResult.value.modelUsed})`);
+  if (!taskGraph) {
+    const planInput: AgentInput<string> = {
+      runId,
+      payload: prdText,
+      iteration: 0,
+    };
+
+    const planResult = await deps.planningAgent.run(planInput);
+    if (!planResult.ok) {
+      return err(new Error(`Planning failed: ${planResult.error.message}`));
+    }
+
+    taskGraph = planResult.value.payload;
+    const planDurationMs = Math.round(performance.now() - startMs);
+    logger.info(`Planning complete: ${taskGraph.tasks.length} tasks generated in ${planDurationMs}ms (model: ${planResult.value.modelUsed})`);
+  }
 
   // Log each task in the plan
   for (const task of taskGraph.tasks) {
@@ -104,6 +149,17 @@ export async function runPipeline(
   const validation = validateGraph(taskGraph);
   if (!validation.ok) {
     return err(new Error(`Invalid task graph: ${validation.error.message}`));
+  }
+
+  // Cache the plan for future runs (skip if it came from cache)
+  if (!planFromCache) {
+    await mkdir(dirname(planCachePath), { recursive: true });
+    const cacheWriteResult = await writeJson(planCachePath, taskGraph);
+    if (cacheWriteResult.ok) {
+      logger.info(`Plan cached at ${planCachePath}`);
+    } else {
+      logger.warn(`Failed to cache plan: ${cacheWriteResult.error.message}`);
+    }
   }
 
   // Write plan

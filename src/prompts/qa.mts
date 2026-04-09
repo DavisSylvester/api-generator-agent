@@ -84,11 +84,14 @@ describe('POST /users', () => {
 - Keep tests CONCISE — max 2-3 tests per endpoint. Do NOT write exhaustive edge case tests.
 - **IMPORTANT**: Keep the total test file under 150 lines. Prioritize coverage breadth over depth.
 
-## Import Rules
-- Only import functions, classes, and types that are ACTUALLY exported by the provided code files
-- Do NOT assume exports exist — verify against the code provided
+## Import Rules (CRITICAL)
+- ONLY import names listed in the "Available Exports" section below. If a name is not in that list, it does NOT exist — do NOT use it.
+- Import from the SPECIFIC FILE listed next to each export, NOT from barrel index.mts files. Barrels may not re-export everything.
+  - CORRECT: \`import { CreateTodoInput } from '../code/src/types/create-todo-input.mts'\`
+  - WRONG: \`import { CreateTodoInput } from '../code/src/types/index.mts'\`
 - Do NOT import third-party packages unless they appear in the source code imports
 - Use relative imports with explicit .mts extensions
+- Do NOT invent helper functions like \`validateX()\` — if they're not in the export list, they don't exist
 
 ## Output Format
 Output a single test file as a fenced code block with the file path:
