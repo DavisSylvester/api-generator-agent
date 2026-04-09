@@ -167,6 +167,14 @@ function sanitizeCodeFiles(files: readonly CodeFile[], logger: Logger): CodeFile
       logger.warn(`[codegen] Converted import type → import in ${file.path}`);
     }
 
+    // Remove `export type X = Static<typeof Y>` lines — these are erased at runtime
+    // and break barrel re-exports. Callers should use Static<typeof Schema> directly.
+    const typeAliasPattern = /^export\s+type\s+\w+\s*=\s*Static<.*>.*$/gm;
+    if (typeAliasPattern.test(content)) {
+      content = content.replace(/^export\s+type\s+\w+\s*=\s*Static<.*>.*$/gm, ``);
+      logger.warn(`[codegen] Removed export type aliases (Static<>) in ${file.path} — callers use Static<typeof Schema> directly`);
+    }
+
     if (content !== file.content) {
       return { path: file.path, content };
     }

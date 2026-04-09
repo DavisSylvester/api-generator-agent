@@ -166,6 +166,8 @@ When your task has dependencies (shown in "Available Code from Dependencies"), y
 2. All cross-directory imports MUST use the barrel (\`index.mts\`), not direct file paths
 3. Intra-directory imports (within the same folder) may reference the file directly
 4. Example barrel: \`export { UserService } from './user-service.mts'\`
+5. Barrels MUST only re-export runtime values (const, function, class) — NOT type aliases
+6. Do NOT use \`export type X = Static<typeof Schema>\` — it breaks barrel re-exports at runtime. Callers derive types with \`Static<typeof Schema>\` directly where needed.
 
 ## Async/Await Rules
 1. All route handlers that call services or repositories MUST be \`async\` and use \`await\`
