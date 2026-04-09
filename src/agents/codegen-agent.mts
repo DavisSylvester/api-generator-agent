@@ -153,7 +153,8 @@ function sanitizeCodeFiles(files: readonly CodeFile[], logger: Logger): CodeFile
   const forbiddenPattern = /^import\s+(?:['"]reflect-metadata['"]|.*from\s+['"](?:tsyringe|inversify|typedi|awilix)['"]).*$/gm;
   const importTypePattern = /^import\s+type\s+/gm;
 
-  return files.map((file) => {
+  // Pass 1: sanitize individual files
+  const pass1 = files.map((file) => {
     let content = file.content;
 
     const blockedContent = content.replace(forbiddenPattern, (match) => `// [blocked] ${match}`);
@@ -167,18 +168,66 @@ function sanitizeCodeFiles(files: readonly CodeFile[], logger: Logger): CodeFile
       logger.warn(`[codegen] Converted import type → import in ${file.path}`);
     }
 
-    // Remove `export type X = Static<typeof Y>` lines — these are erased at runtime
-    // and break barrel re-exports. Callers should use Static<typeof Schema> directly.
-    const typeAliasPattern = /^export\s+type\s+\w+\s*=\s*Static<.*>.*$/gm;
-    if (typeAliasPattern.test(content)) {
+    // Remove `export type X = Static<typeof Y>` lines — erased at runtime
+    if (/^export\s+type\s+\w+\s*=\s*Static<.*>.*$/gm.test(content)) {
       content = content.replace(/^export\s+type\s+\w+\s*=\s*Static<.*>.*$/gm, ``);
-      logger.warn(`[codegen] Removed export type aliases (Static<>) in ${file.path} — callers use Static<typeof Schema> directly`);
+      logger.warn(`[codegen] Removed export type aliases (Static<>) in ${file.path}`);
     }
 
-    if (content !== file.content) {
-      return { path: file.path, content };
+    return content !== file.content ? { path: file.path, content } : file;
+  });
+
+  // Pass 2: clean barrel re-exports — remove names that source files don't export
+  const exportMap = new Map<string, Set<string>>();
+  for (const file of pass1) {
+    const names = new Set<string>();
+    for (const match of file.content.matchAll(/^export\s+(?:const|function|class)\s+(\w+)/gm)) {
+      if (match[1]) names.add(match[1]);
+    }
+    exportMap.set(file.path, names);
+  }
+
+  return pass1.map((file) => {
+    // Only process barrel files (files with re-export lines)
+    if (!file.content.includes(`} from './`) && !file.content.includes(`} from "../`)) {
+      return file;
     }
 
-    return file;
+    let content = file.content;
+    const reExportPattern = /^export\s+\{([^}]+)\}\s+from\s+['"`]([^'"`]+)['"`].*$/gm;
+    let modified = false;
+
+    content = content.replace(reExportPattern, (line, namesList: string, fromPath: string) => {
+      // Resolve the source file path
+      const dir = file.path.substring(0, file.path.lastIndexOf(`/`));
+      let resolved = fromPath.startsWith(`./`) ? `${dir}/${fromPath.substring(2)}` : `${dir}/${fromPath}`;
+      if (!resolved.endsWith(`.mts`)) resolved += `.mts`;
+
+      const sourceExports = exportMap.get(resolved);
+      if (!sourceExports) return line; // can't verify, keep as-is
+
+      const names = namesList.split(`,`).map((n) => n.trim()).filter(Boolean);
+      const validNames = names.filter((n) => {
+        const baseName = n.includes(` as `) ? n.split(` as `)[0]!.trim() : n;
+        return sourceExports.has(baseName);
+      });
+
+      if (validNames.length === 0) {
+        modified = true;
+        logger.warn(`[codegen] Removed empty barrel re-export from ${fromPath} in ${file.path}`);
+        return ``;
+      }
+
+      if (validNames.length < names.length) {
+        modified = true;
+        const removed = names.filter((n) => !validNames.includes(n));
+        logger.warn(`[codegen] Removed non-existent exports [${removed.join(`, `)}] from barrel in ${file.path}`);
+        return `export { ${validNames.join(`, `)} } from '${fromPath}'`;
+      }
+
+      return line;
+    });
+
+    return modified ? { path: file.path, content } : file;
   });
 }
