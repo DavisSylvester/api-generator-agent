@@ -1,5 +1,4 @@
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
-import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import { join, relative } from 'node:path';
 import { writeFile, mkdir, access, readFile } from 'node:fs/promises';
 import type { Logger } from 'winston';
@@ -9,13 +8,7 @@ import type { Result } from '../types/result.mts';
 import { ok, err } from '../types/result.mts';
 import type { ModelChainConfig } from '../config/models.mts';
 import type { OllamaFactory } from '../llm/ollama-factory.mts';
-import { QA_SYSTEM_PROMPT, createQaUserPrompt } from '../prompts/qa.mts';
-import {
-  QA_INTEGRATION_SYSTEM_PROMPT,
-  createQaIntegrationUserPrompt,
-} from '../prompts/qa-integration.mts';
-import { streamInvoke } from '../llm/stream-invoke.mts';
-import { readKnowledge, appendKnowledge, analyzeTestErrors } from './qa-knowledge.mts';
+import { appendKnowledge, analyzeTestErrors } from './qa-knowledge.mts';
 import type { CodeFile } from './codegen-agent.mts';
 
 export interface QaInput {
@@ -28,7 +21,7 @@ export interface QaInput {
   readonly codeDir: string;
   readonly integrationDir: string;
   readonly knowledgePath: string;
-  readonly mode: 'generate' | 'runOnly';
+  readonly mode: 'runOnly';
   readonly port: number;
   readonly testScope?: 'unit-only' | 'full';
   readonly availableExports?: readonly string[];
@@ -44,7 +37,6 @@ export interface QaResult {
   readonly passed: boolean;
   readonly errors: readonly string[];
   readonly testOutput: string;
-  readonly testFile?: string;
   readonly unit: TestPhaseResult;
   readonly integration: TestPhaseResult;
 }
@@ -57,25 +49,19 @@ export class QaAgent extends BaseAgent<QaInput, QaResult> {
 
   protected async execute(
     input: AgentInput<QaInput>,
-    chatModel: BaseChatModel,
-    traceConfig: Record<string, unknown>,
+    _chatModel: BaseChatModel,
+    _traceConfig: Record<string, unknown>,
   ): Promise<Result<QaResult, Error>> {
     const {
-      taskId, taskName, taskDescription, taskType, codeFiles,
-      testsDir, codeDir, integrationDir, knowledgePath, mode, port,
-      availableExports,
+      taskId, taskName, codeFiles,
+      testsDir, codeDir, integrationDir, knowledgePath, port,
     } = input.payload;
 
-    const knowledge = await readKnowledge(knowledgePath);
     const testFilePath = join(testsDir, `${taskId}.test.mts`);
     const collectionPath = join(integrationDir, 'collection.json');
     const taskDir = join(testsDir, '..');
 
-    const codeStr = codeFiles
-      .map((f) => `// ${f.path}\n${f.content}`)
-      .join('\n\n');
-
-    // Write code files to code dir (needed for both modes — code may have changed)
+    // Write code files to code dir
     this.logger.info(`[qa] Writing ${codeFiles.length} code files to ${codeDir}`);
     for (const file of codeFiles) {
       const codePath = join(codeDir, file.path);
@@ -87,68 +73,12 @@ export class QaAgent extends BaseAgent<QaInput, QaResult> {
     // Install third-party dependencies so imports resolve at test time
     await this.installDependencies(codeFiles, taskDir);
 
-    if (mode === 'generate') {
-      this.logger.info(`[qa] Generating unit tests for task: "${taskName}" (${codeFiles.length} code files)`);
-
-      // Generate unit tests
-      const unitMessages = [
-        new SystemMessage(QA_SYSTEM_PROMPT),
-        new HumanMessage(createQaUserPrompt(taskName, taskDescription, codeStr, knowledge, taskType, availableExports)),
-      ];
-
-      this.logger.info('[qa] Sending code to LLM for unit test generation (streaming)');
-      const unitContent = await streamInvoke(chatModel, unitMessages, traceConfig);
-
-      // Debug logging to diagnose parse failures
-      this.logger.info(`[qa][debug] Response length: ${unitContent.length} chars`);
-      this.logger.info(`[qa][debug] First 500 chars: ${unitContent.substring(0, 500)}`);
-      this.logger.info(`[qa][debug] Contains triple backticks: ${unitContent.includes('```')}`);
-      this.logger.info(`[qa][debug] Contains <think>: ${unitContent.includes('<think')}`);
-
-      const testFile = parseTestFile(unitContent);
-      if (!testFile) {
-        this.logger.warn('[qa] No unit test file found in LLM response');
-        this.logger.warn(`[qa][debug] Parse returned undefined. Full response (last 500 chars): ${unitContent.substring(unitContent.length - 500)}`);
-        return err(new Error('No unit test file found in QA response'));
-      }
-
-      this.logger.info(`[qa][debug] Parse succeeded, extracted ${testFile.length} chars`);
-
-      this.logger.info(`[qa] Unit test file generated (${testFile.length} chars)`);
-      await mkdir(testsDir, { recursive: true });
-      await writeFile(testFilePath, testFile, 'utf-8');
-
-      // Generate Hoppscotch integration collection
-      this.logger.info(`[qa] Generating Hoppscotch collection for task: "${taskName}"`);
-      const integrationMessages = [
-        new SystemMessage(QA_INTEGRATION_SYSTEM_PROMPT),
-        new HumanMessage(createQaIntegrationUserPrompt(taskName, taskDescription, codeStr, knowledge)),
-      ];
-
-      const integrationContent = await streamInvoke(chatModel, integrationMessages, traceConfig);
-      const collection = parseJsonBlock(integrationContent);
-      if (!collection) {
-        this.logger.warn('[qa] No Hoppscotch collection JSON found in LLM response');
-        return err(new Error('No Hoppscotch collection found in QA response'));
-      }
-
-      this.logger.info(`[qa] Hoppscotch collection generated (${collection.length} chars)`);
-      await mkdir(integrationDir, { recursive: true });
-      await writeFile(collectionPath, collection, 'utf-8');
-    } else {
-      // runOnly mode — verify existing files exist
-      const [testExists, collectionExists] = await Promise.all([
-        fileExists(testFilePath),
-        fileExists(collectionPath),
-      ]);
-      if (!testExists) {
-        return err(new Error(`runOnly mode but no test file at ${testFilePath}`));
-      }
-      if (!collectionExists) {
-        return err(new Error(`runOnly mode but no Hoppscotch collection at ${collectionPath}`));
-      }
-      this.logger.info(`[qa] Re-running existing tests for task: "${taskName}"`);
+    // Verify test file exists (codegen should have generated it)
+    const testExists = await fileExists(testFilePath);
+    if (!testExists) {
+      return err(new Error(`No test file found at ${testFilePath} — codegen should have generated it`));
     }
+    this.logger.info(`[qa] Running codegen-generated tests for task: "${taskName}"`);
 
     // ── Phase 1: Unit tests (bun test with .handle()) ──
     const relativeTestPath = relative(taskDir, testFilePath);
@@ -168,9 +98,10 @@ export class QaAgent extends BaseAgent<QaInput, QaResult> {
 
     // ── Phase 2: Integration tests (Hoppscotch against running server) ──
     let integrationResult: TestPhaseResult;
-    if (input.payload.testScope === `unit-only`) {
-      this.logger.info(`[qa] Skipping integration tests (unit-only mode)`);
-      integrationResult = { passed: true, errors: [], output: `Skipped (unit-only mode)` };
+    const collectionExists = await fileExists(collectionPath);
+    if (input.payload.testScope === `unit-only` || !collectionExists) {
+      this.logger.info(`[qa] Skipping integration tests (${!collectionExists ? `no collection file` : `unit-only mode`})`);
+      integrationResult = { passed: true, errors: [], output: `Skipped` };
     } else {
       this.logger.info(`[qa] Starting integration tests on port ${port}`);
       integrationResult = await this.runIntegrationTests(codeFiles, codeDir, collectionPath, port);
@@ -204,20 +135,10 @@ export class QaAgent extends BaseAgent<QaInput, QaResult> {
       }
     }
 
-    let testFileContent: string | undefined;
-    if (mode === 'generate') {
-      try {
-        testFileContent = await readFile(testFilePath, 'utf-8');
-      } catch {
-        // Not critical
-      }
-    }
-
     return ok({
       passed: allPassed,
       errors: allErrors,
       testOutput: combinedOutput,
-      testFile: testFileContent,
       unit: unitResult,
       integration: integrationResult,
     });
@@ -603,46 +524,6 @@ async function collectStream(stream: ReadableStream<Uint8Array> | number | null 
   } catch {
     return '';
   }
-}
-
-function looksLikeTestCode(code: string): boolean {
-  return code.includes('bun:test') || code.includes('describe(') || code.includes('it(');
-}
-
-function parseTestFile(content: string): string | undefined {
-  // Strategy 1: Fenced code blocks with various language tags / path-style labels
-  // Matches: ```typescript, ```ts, ```mts, ```tests/foo.test.mts, ```<anything>, and bare ```
-  const fencedBlockPattern = /```[^\n]*\n([\s\S]*?)```/g;
-  let match: RegExpExecArray | null;
-
-  while ((match = fencedBlockPattern.exec(content)) !== null) {
-    const code = match[1]?.trim();
-    if (code && looksLikeTestCode(code)) {
-      return code;
-    }
-  }
-
-  // Strategy 2: No code fences at all — try to extract raw code starting with import
-  // This handles cases where the model outputs test code directly without fences
-  const importStart = content.indexOf('import ');
-  if (importStart !== -1) {
-    const rawCode = content.substring(importStart).trim();
-    if (looksLikeTestCode(rawCode)) {
-      return rawCode;
-    }
-  }
-
-  return undefined;
-}
-
-function parseJsonBlock(content: string): string | undefined {
-  // Try fenced code block first
-  const fenced = /```(?:json)?\n([\s\S]*?)```/.exec(content);
-  if (fenced?.[1]) return fenced[1].trim();
-
-  // Fall back to raw JSON extraction
-  const jsonMatch = content.match(/\{[\s\S]*\}/);
-  return jsonMatch?.[0]?.trim();
 }
 
 function extractErrors(output: string): readonly string[] {

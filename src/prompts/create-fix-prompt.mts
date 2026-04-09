@@ -5,6 +5,7 @@ export function createFixPrompt(
   errors: readonly string[],
   taskType?: string,
   existingCode?: string,
+  taskId?: string,
 ): string {
   // Extract file paths from "// path" comment headers in previousCode
   const pathPattern = /^\/\/\s+(src\/[^\n]+\.mts|[^\n]+\.mts)/gm;
@@ -47,5 +48,6 @@ ${errors.map((e, i) => `${i + 1}. ${e}`).join('\n')}
 Fix ALL the errors above. Output the complete corrected files using fenced code blocks with file paths.
 Do not skip any files — regenerate all files for this task with the fixes applied.
 
-**IMPORTANT**: Use the EXACT same file paths as shown above (e.g. \`src/index.mts\`, NOT \`src/src/index.mts\`). Do NOT add extra \`src/\` prefixes.`;
+**IMPORTANT**: Use the EXACT same file paths as shown above (e.g. \`src/index.mts\`, NOT \`src/src/index.mts\`). Do NOT add extra \`src/\` prefixes.
+Also regenerate the test file as \`tests/${taskId ?? `task`}.test.mts\` with fixes applied. The test MUST only import names you actually exported.`;
 }

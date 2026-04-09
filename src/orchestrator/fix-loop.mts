@@ -42,7 +42,6 @@ export async function runFixLoop(
   let lastCode: readonly CodeFile[] = [];
   let existingCodeContext: string | undefined;
   let depCodeFiles: readonly CodeFile[] = [];
-  let testsGenerated = false;
   const passingTests = new Set<string>();
 
   const knowledgePath = workspace.taskQaKnowledgePath(task.id);
@@ -90,6 +89,7 @@ export async function runFixLoop(
           taskName: task.name,
           taskDescription: task.description,
           taskType: task.type,
+          taskId: task.id,
           mode: `generate`,
           existingCode: existingCodeContext,
         }
@@ -97,6 +97,7 @@ export async function runFixLoop(
           taskName: task.name,
           taskDescription: task.description,
           taskType: task.type,
+          taskId: task.id,
           mode: `fix`,
           previousCode: lastCode.map((f) => `// ${f.path}\n${f.content}`).join(`\n\n`),
           errors: [...lastErrors, ...knowledgeContext],
@@ -105,7 +106,7 @@ export async function runFixLoop(
 
     // Capture the user prompt for iteration logging
     const capturedUserPrompt = iteration === 0
-      ? createCodegenUserPrompt(task.name, task.description, existingCodeContext, task.type)
+      ? createCodegenUserPrompt(task.name, task.description, existingCodeContext, task.type, task.id)
       : createFixPrompt(
           task.name,
           task.description,
@@ -113,6 +114,7 @@ export async function runFixLoop(
           [...lastErrors, ...knowledgeContext],
           task.type,
           existingCodeContext,
+          task.id,
         );
 
     const agentInput: AgentInput<CodegenInput> = {
@@ -138,9 +140,27 @@ export async function runFixLoop(
       });
     }
 
-    let codeFiles = codegenResult.value.payload;
+    const allFiles = codegenResult.value.payload;
     const codegenDurationMs = Math.round(performance.now() - codegenStartMs);
-    logger.info(`[fix-loop] Step 1/3: CodeGen completed in ${codegenDurationMs}ms — ${codeFiles.length} files (model: ${codegenResult.value.modelUsed})`);
+    logger.info(`[fix-loop] Step 1/3: CodeGen completed in ${codegenDurationMs}ms — ${allFiles.length} files (model: ${codegenResult.value.modelUsed})`);
+
+    // Separate test files from code files
+    const testFiles = allFiles.filter((f) => f.path.includes(`.test.mts`) || f.path.includes(`.test.ts`));
+    let codeFiles: readonly CodeFile[] = allFiles.filter((f) => !f.path.includes(`.test.mts`) && !f.path.includes(`.test.ts`));
+
+    if (testFiles.length > 0) {
+      logger.info(`[fix-loop] Codegen produced ${testFiles.length} test file(s) and ${codeFiles.length} code files`);
+      // Write test files to the task tests directory
+      for (const tf of testFiles) {
+        // Normalize test file name: use just the filename, not the full path
+        const testFileName = tf.path.includes(`/`) ? tf.path.substring(tf.path.lastIndexOf(`/`) + 1) : tf.path;
+        const testPath = `${workspace.taskTestsDir(task.id)}/${testFileName}`;
+        await writeCode(testPath, tf.content);
+        logger.info(`[fix-loop] Wrote test file: ${testPath} (${tf.content.length} chars)`);
+      }
+    } else {
+      logger.warn(`[fix-loop] Codegen did not produce any test files`);
+    }
 
     // Write codegen summary
     await writeJson(`${iterDir}/codegen-result.json`, {
@@ -275,9 +295,8 @@ export async function runFixLoop(
       await writeCode(codePath, file.content);
     }
 
-    // Step 3: QA
-    const qaMode = testsGenerated ? 'runOnly' : 'generate';
-    logger.info(`[fix-loop] Step 3/3: QA (${qaMode} mode, iteration ${iteration + 1})`);
+    // Step 3: QA (always runOnly — codegen generates tests)
+    logger.info(`[fix-loop] Step 3/3: QA (runOnly mode, iteration ${iteration + 1})`);
 
     // Extract available exports from generated + dependency code so QA only imports real names
     const allCodeForExports = [...codeFiles, ...depCodeFiles];
@@ -303,7 +322,7 @@ export async function runFixLoop(
         codeDir: workspace.taskCodeDir(task.id),
         integrationDir: workspace.taskIntegrationDir(task.id),
         knowledgePath,
-        mode: qaMode,
+        mode: `runOnly`,
         port: config.integrationPort,
         testScope: `unit-only`,
         availableExports,
@@ -331,15 +350,6 @@ export async function runFixLoop(
 
     const qa = qaResult.value.payload;
 
-    // Only lock tests as generated if they actually ran (no syntax errors in the test file itself)
-    // If the test has syntax/parse errors, regenerate on next iteration
-    const testHasSyntaxError = qa.unit.output.includes(`Unhandled error between tests`)
-      || qa.unit.errors.some((e) => e.includes(`Unexpected`) || e.includes(`can only be used inside`));
-    if (!testHasSyntaxError) {
-      testsGenerated = true;
-    } else {
-      logger.warn(`[fix-loop] Test file has syntax errors — will regenerate on next iteration`);
-    }
     logger.info(`[fix-loop] Step 3/3: QA completed in ${qaDurationMs}ms — unit: ${qa.unit.passed ? `PASS` : `FAIL`}`);
 
     await writeJson(workspace.taskQaResultsPath(task.id), qa);
@@ -431,7 +441,9 @@ export async function runFixLoop(
     lastErrors = allQaErrors.length > 0
       ? [...regressionWarnings, ...allQaErrors, ...rawOutputContext]
       : [`Tests failed with exit code non-zero. Full output:\n${qa.testOutput.substring(0, 8000)}`];
-    lastCode = codeFiles.map((f) => ({
+    // Include both code and test files so the fix prompt sees everything
+    const allLastFiles = [...codeFiles, ...testFiles];
+    lastCode = allLastFiles.map((f) => ({
       path: f.path.replace(/^(src\/)+/, `src/`),
       content: f.content,
     }));

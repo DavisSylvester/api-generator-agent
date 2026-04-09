@@ -314,4 +314,17 @@ For each file, output a fenced code block with the file path as the language ide
 // code here
 \`\`\`
 
+## Test File (REQUIRED)
+You MUST also generate a test file alongside the code files. Output it as a fenced code block with path \`tests/{taskId}.test.mts\` (the task ID will be provided in the user prompt).
+
+Test file rules:
+- Use \`bun:test\` with \`describe\`/\`it\`/\`expect\`
+- Keep tests concise — max 150 lines, 2-3 tests per feature
+- ALL imports in the test MUST reference exports that exist in the code files you generated
+- Since tests are in \`tests/\` and source code is in \`code/\`, all imports from tests to source code MUST use the \`../code/\` prefix
+- For example, if you generate \`src/index.mts\`, the test imports: \`import { app } from '../code/src/index.mts'\`
+- Do NOT import names that you did not export in your code files
+- Do NOT use fetch() against localhost — use Elysia \`.handle()\` for HTTP tests
+- Every response follows the standard ApiResponse shape: \`{ statusCode, message, date, source, data }\`
+
 Generate ALL files needed for the task. Include imports, types, and complete implementations.`;

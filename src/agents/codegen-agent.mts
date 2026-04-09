@@ -18,6 +18,7 @@ export interface CodegenInput {
   readonly taskName: string;
   readonly taskDescription: string;
   readonly taskType?: string;
+  readonly taskId?: string;
   readonly mode: 'generate' | 'fix';
   readonly existingCode?: string;
   readonly previousCode?: string;
@@ -42,7 +43,7 @@ export class CodegenAgent extends BaseAgent<CodegenInput, CodegenOutput> {
     chatModel: BaseChatModel,
     traceConfig: Record<string, unknown>,
   ): Promise<Result<CodegenOutput, Error>> {
-    const { taskName, taskDescription, taskType, mode, existingCode, previousCode, errors } = input.payload;
+    const { taskName, taskDescription, taskType, taskId, mode, existingCode, previousCode, errors } = input.payload;
 
     this.logger.info(`[codegen] Task: "${taskName}" | Type: ${taskType ?? `unknown`} | Mode: ${mode} | Iteration: ${input.iteration}`);
     if (mode === 'fix' && errors) {
@@ -51,9 +52,9 @@ export class CodegenAgent extends BaseAgent<CodegenInput, CodegenOutput> {
 
     let userPrompt: string;
     if (mode === 'fix' && previousCode && errors) {
-      userPrompt = createFixPrompt(taskName, taskDescription, previousCode, errors, taskType, existingCode);
+      userPrompt = createFixPrompt(taskName, taskDescription, previousCode, errors, taskType, existingCode, taskId);
     } else {
-      userPrompt = createCodegenUserPrompt(taskName, taskDescription, existingCode, taskType);
+      userPrompt = createCodegenUserPrompt(taskName, taskDescription, existingCode, taskType, taskId);
     }
 
     const messages = [

@@ -1,13 +1,35 @@
+function getTaskTypeTestInstructions(taskType?: string): string {
+  switch (taskType) {
+    case `setup`:
+      return `\n## Test Instructions for setup task\nTest the Elysia app via app.handle(). Import \`app\` from \`../code/src/index.mts\` and test:\n1. The health endpoint returns valid JSON with expected shape\n2. An unknown route returns a JSON 404 response (tests the error handler)\n\n**CRITICAL**: Before importing the app, set all required environment variables that env.mts validates:\n\`\`\`typescript\nprocess.env.JWT_SECRET = 'test-secret-key-that-is-at-least-32-characters-long!!'\nprocess.env.DATABASE_URL = ':memory:'\nprocess.env.NODE_ENV = 'test'\nprocess.env.PORT = '0'\n\nimport { app } from '../code/src/index.mts'\n\`\`\`\nDo NOT create your own Elysia instance. Test error handling by hitting routes that trigger errors.\n`;
+    case `model`:
+      return `\n## Test Instructions for model task\nWrite pure unit tests. Import schemas from \`../code/src/types/\` and test validation, defaults, and edge cases. Do NOT create any Elysia instance.\n\nUse \`Value\` from \`@sinclair/typebox/value\` for validation:\n\`\`\`typescript\nimport { Value } from '@sinclair/typebox/value'\nconst isValid = Value.Check(MySchema, data)\nconst errors = [...Value.Errors(MySchema, data)]\n\`\`\`\n\nTest expectations for optional fields:\n- \`Value.Check(schema, { title: \`Buy milk\` })\` returns true when only required fields provided\n- \`Value.Check()\` does NOT apply defaults — use \`Value.Default(schema, data)\` first\n`;
+    case `repository`:
+      return `\n## Test Instructions for repository task\nWrite pure unit tests. Import the repository, instantiate with in-memory SQLite, test CRUD. No Elysia instance.\n\`\`\`typescript\nimport { Database } from 'bun:sqlite'\nconst db = new Database(':memory:')\n\`\`\`\n`;
+    case `service`:
+      return `\n## Test Instructions for service task\nWrite pure unit tests. Import the service, provide mock/stub repositories, test business logic. No Elysia instance.\n`;
+    case `endpoint`:
+      return `\n## Test Instructions for endpoint task\nThe code exports an Elysia plugin. Create a test Elysia instance, mount the plugin with \`.use()\`, and test via \`.handle()\`:\n\`\`\`typescript\nimport { Elysia } from 'elysia'\nimport { fooRoutes } from '../code/src/api/foo/router.mts'\nconst testApp = new Elysia().use(fooRoutes)\nconst res = await testApp.handle(new Request('http://localhost/api/v1/foo'))\n\`\`\`\n`;
+    default:
+      return ``;
+  }
+}
+
 export function createCodegenUserPrompt(
   taskName: string,
   taskDescription: string,
   existingCode?: string,
   taskType?: string,
+  taskId?: string,
 ): string {
   let prompt = `## Task: ${taskName}`;
 
   if (taskType) {
     prompt += `\nTask type: ${taskType}`;
+  }
+
+  if (taskId) {
+    prompt += `\nTask ID: ${taskId} (use this for the test file path: \`tests/${taskId}.test.mts\`)`;
   }
 
   prompt += `\n\n${taskDescription}`;
@@ -29,7 +51,10 @@ Do NOT duplicate any types, interfaces, or utilities shown below — doing so ca
 ${existingCode}`;
   }
 
-  prompt += `\n\nGenerate all required files with complete implementations. Use fenced code blocks with file paths.`;
+  prompt += getTaskTypeTestInstructions(taskType);
+
+  prompt += `\n\nGenerate all required files with complete implementations. Use fenced code blocks with file paths.
+Also generate the test file as \`tests/${taskId ?? `task`}.test.mts\`. The test MUST only import names you actually exported.`;
 
   return prompt;
 }
