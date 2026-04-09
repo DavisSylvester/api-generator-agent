@@ -12,7 +12,7 @@ import { writeFile, mkdir, readFile } from 'node:fs/promises';
 import { CODEGEN_SYSTEM_PROMPT } from '../prompts/codegen-system-prompt.mts';
 import { createCodegenUserPrompt } from '../prompts/create-codegen-user-prompt.mts';
 import { createFixPrompt } from '../prompts/create-fix-prompt.mts';
-import { validateImports } from '../validators/import-validator.mts';
+import { validateImports, validateNamedExports } from '../validators/import-validator.mts';
 import { extractExports } from '../validators/extract-exports.mts';
 
 export interface FixLoopConfig {
@@ -236,6 +236,19 @@ export async function runFixLoop(
           : e.type === `missing-barrel`
             ? `Missing barrel file: ${e.resolvedPath}. Create an index.mts that re-exports all sibling modules in that directory.`
             : `Import error in ${e.sourceFile}: "${e.importPath}" does not exist. Generate this file or fix the import.`,
+      );
+      lastCode = codeFiles.map((f) => ({ path: f.path.replace(/^(src\/)+/, `src/`), content: f.content }));
+      continue;
+    }
+
+    // Named export validation — catch mismatched imports/re-exports before QA
+    const allCodeForValidation = [...codeFiles, ...depCodeFiles];
+    const exportErrors = validateNamedExports(allCodeForValidation, logger);
+    if (exportErrors.length > 0) {
+      logger.warn(`[fix-loop] Named export validation found ${exportErrors.length} issues — skipping QA`);
+      await writeJson(`${iterDir}/import-export-errors.json`, exportErrors);
+      lastErrors = exportErrors.map((e) =>
+        `File '${e.sourceFile}' imports/re-exports '${e.importedName}' from '${e.fromFile}', but that file exports: [${e.actualExports.join(', ')}]. Fix the import or barrel to match actual exports.`,
       );
       lastCode = codeFiles.map((f) => ({ path: f.path.replace(/^(src\/)+/, `src/`), content: f.content }));
       continue;

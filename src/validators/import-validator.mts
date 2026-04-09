@@ -1,6 +1,7 @@
 import { posix } from 'node:path';
 import type { Logger } from 'winston';
 import type { CodeFile } from '../agents/codegen-agent.mts';
+import { extractExportsFromContent } from './extract-exports.mts';
 
 export interface ImportError {
   readonly sourceFile: string;
@@ -10,7 +11,17 @@ export interface ImportError {
   readonly type: 'missing' | 'wrong-path' | 'missing-barrel';
 }
 
+export interface ExportValidationError {
+  readonly sourceFile: string;
+  readonly importedName: string;
+  readonly fromFile: string;
+  readonly actualExports: readonly string[];
+  readonly type: 'missing-named-export' | 'missing-file' | 'wrong-path' | 'missing-barrel';
+}
+
 const IMPORT_PATTERN = /from\s+['"](\.[^'"]+)['"]/g;
+const NAMED_IMPORT_PATTERN = /import\s+(?:type\s+)?\{([^}]+)\}\s+from\s+['"](\.[^'"]+)['"]/g;
+const RE_EXPORT_PATTERN = /export\s+(?:type\s+)?\{([^}]+)\}\s+from\s+['"](\.[^'"]+)['"]/g;
 
 export function validateImports(
   codeFiles: readonly CodeFile[],
@@ -143,6 +154,161 @@ export function validateImports(
   }
 
   return errors;
+}
+
+export function validateNamedExports(
+  codeFiles: readonly CodeFile[],
+  logger: Logger,
+): readonly ExportValidationError[] {
+  const errors: ExportValidationError[] = [];
+
+  // Build a map of file path -> export names
+  const fileExportsMap = new Map<string, readonly string[]>();
+  const allFiles = new Map<string, CodeFile>();
+
+  for (const file of codeFiles) {
+    const normalized = normalizePath(file.path);
+    const exportEntries = extractExportsFromContent(file.content);
+    const exportNames = exportEntries.map((e) =>
+      e.kind === 'type' || e.kind === 'interface' ? `${e.kind} ${e.name}` : e.name,
+    );
+    const rawNames = exportEntries.map((e) => e.name);
+    // Store both decorated and raw names — imports use raw names
+    fileExportsMap.set(normalized, rawNames);
+    allFiles.set(normalized, file);
+  }
+
+  // Check each file's named imports and re-exports
+  for (const file of codeFiles) {
+    const sourceNormalized = normalizePath(file.path);
+    const sourceDir = posix.dirname(sourceNormalized);
+
+    // Check named imports: import { A, B } from './path.mts'
+    const importMatches = file.content.matchAll(NAMED_IMPORT_PATTERN);
+    for (const match of importMatches) {
+      const namesStr = match[1]!;
+      const importPath = match[2]!;
+
+      const resolved = resolveAndFindFile(sourceDir, importPath, allFiles);
+      if (!resolved) {
+        // File doesn't exist — already caught by validateImports, skip
+        continue;
+      }
+
+      const targetExports = fileExportsMap.get(resolved);
+      if (!targetExports) {
+        continue;
+      }
+
+      const importedNames = parseNamesList(namesStr);
+      for (const name of importedNames) {
+        if (!targetExports.includes(name)) {
+          const decorated = getDecoratedExports(resolved, codeFiles);
+          errors.push({
+            sourceFile: file.path,
+            importedName: name,
+            fromFile: importPath,
+            actualExports: decorated,
+            type: 'missing-named-export',
+          });
+          logger.debug(
+            `[import-validator] Named export missing: ${file.path} imports '${name}' from '${importPath}', but that file exports: [${targetExports.join(', ')}]`,
+          );
+        }
+      }
+    }
+
+    // Check re-exports: export { A, B } from './path.mts'
+    const reExportMatches = file.content.matchAll(RE_EXPORT_PATTERN);
+    for (const match of reExportMatches) {
+      const namesStr = match[1]!;
+      const importPath = match[2]!;
+
+      const resolved = resolveAndFindFile(sourceDir, importPath, allFiles);
+      if (!resolved) {
+        continue;
+      }
+
+      const targetExports = fileExportsMap.get(resolved);
+      if (!targetExports) {
+        continue;
+      }
+
+      const reExportedNames = parseNamesList(namesStr);
+      for (const name of reExportedNames) {
+        if (!targetExports.includes(name)) {
+          const decorated = getDecoratedExports(resolved, codeFiles);
+          errors.push({
+            sourceFile: file.path,
+            importedName: name,
+            fromFile: importPath,
+            actualExports: decorated,
+            type: 'missing-named-export',
+          });
+          logger.debug(
+            `[import-validator] Re-export missing: ${file.path} re-exports '${name}' from '${importPath}', but that file exports: [${targetExports.join(', ')}]`,
+          );
+        }
+      }
+    }
+  }
+
+  return errors;
+}
+
+function resolveAndFindFile(
+  sourceDir: string,
+  importPath: string,
+  allFiles: Map<string, CodeFile>,
+): string | undefined {
+  const resolved = posix.normalize(posix.join(sourceDir, importPath));
+
+  if (allFiles.has(resolved)) {
+    return resolved;
+  }
+
+  // Try common extensions
+  const extensions = ['.mts', '.ts', '.mjs', '.js'];
+  for (const ext of extensions) {
+    const withExt = `${resolved}${ext}`;
+    if (allFiles.has(withExt)) {
+      return withExt;
+    }
+  }
+
+  // Try index file
+  const indexPath = `${resolved}/index.mts`;
+  if (allFiles.has(indexPath)) {
+    return indexPath;
+  }
+
+  return undefined;
+}
+
+function parseNamesList(namesStr: string): readonly string[] {
+  return namesStr
+    .split(',')
+    .map((raw) => {
+      const trimmed = raw.trim();
+      // Handle "Name as Alias" — the original name is what needs to exist in the source
+      const asMatch = /^(\w+)\s+as\s+\w+$/.exec(trimmed);
+      return asMatch ? asMatch[1]! : trimmed;
+    })
+    .filter((name) => /^\w+$/.test(name));
+}
+
+function getDecoratedExports(
+  normalizedPath: string,
+  codeFiles: readonly CodeFile[],
+): readonly string[] {
+  const file = codeFiles.find((f) => normalizePath(f.path) === normalizedPath);
+  if (!file) {
+    return [];
+  }
+  const entries = extractExportsFromContent(file.content);
+  return entries.map((e) =>
+    e.kind === 'type' || e.kind === 'interface' ? `${e.kind} ${e.name}` : e.name,
+  );
 }
 
 function normalizePath(filePath: string): string {
