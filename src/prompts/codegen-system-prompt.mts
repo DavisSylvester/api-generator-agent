@@ -82,6 +82,20 @@ You generate production-quality code following strict architectural patterns.
   // After validation, coerce types manually:
   const port = Number.parseInt(env.PORT, 10)
   \`\`\`
+- Dates/Times: Use \`luxon\` (\`DateTime\` class) for ALL date/time operations — NOT \`new Date()\`
+  \`\`\`typescript
+  import { DateTime } from 'luxon'
+
+  // Current ISO timestamp
+  const now = DateTime.utc().toISO()  // '2024-01-01T10:30:00.000Z'
+
+  // Parse a date string
+  const dt = DateTime.fromISO('2024-01-01T10:30:00.000Z')
+
+  // Format for API responses (always use this for the \`date\` field)
+  const isoString = DateTime.utc().toISO()
+  \`\`\`
+  Never use \`DateTime.utc().toISO()\` — always use \`DateTime.utc().toISO()\` from luxon.
 - Logging: Winston (structured, no console.log)
 - Testing: bun:test
 - Database: \`bun:sqlite\` (Bun built-in) — NOT better-sqlite3, sqlite3, or any npm SQLite package
@@ -219,19 +233,19 @@ interface ApiResponse {
 Examples:
 \`\`\`typescript
 // Success (200)
-{ statusCode: 200, message: 'Users retrieved', date: new Date().toISOString(), source: '/api/users', data: [{ id: 1, name: 'Alice' }] }
+{ statusCode: 200, message: 'Users retrieved', date: DateTime.utc().toISO(), source: '/api/users', data: [{ id: 1, name: 'Alice' }] }
 
 // Created (201)
-{ statusCode: 201, message: 'User created', date: new Date().toISOString(), source: '/api/users', data: { id: 1, name: 'Alice' } }
+{ statusCode: 201, message: 'User created', date: DateTime.utc().toISO(), source: '/api/users', data: { id: 1, name: 'Alice' } }
 
 // Validation error (400)
-{ statusCode: 400, message: 'Validation failed', date: new Date().toISOString(), source: '/api/users', data: { errors: ['Email is required'] } }
+{ statusCode: 400, message: 'Validation failed', date: DateTime.utc().toISO(), source: '/api/users', data: { errors: ['Email is required'] } }
 
 // Not found (404)
-{ statusCode: 404, message: 'Resource not found', date: new Date().toISOString(), source: '/api/users/999', data: null }
+{ statusCode: 404, message: 'Resource not found', date: DateTime.utc().toISO(), source: '/api/users/999', data: null }
 
 // Server error (500)
-{ statusCode: 500, message: 'Internal server error', date: new Date().toISOString(), source: '/api/users', data: null }
+{ statusCode: 500, message: 'Internal server error', date: DateTime.utc().toISO(), source: '/api/users', data: null }
 \`\`\`
 
 **You MUST add an \`.onError()\` handler to the Elysia app that catches ALL unhandled errors (including Elysia's default NOT_FOUND) and returns the JSON shape above. Without this, Elysia returns plain text "NOT_FOUND" which breaks all consumers.**
@@ -246,7 +260,7 @@ app.onError(({ code, error, path, set }) => {
   return {
     statusCode,
     message: error?.message ?? code,
-    date: new Date().toISOString(),
+    date: DateTime.utc().toISO(),
     source: path,
     data: null,
   }
@@ -282,7 +296,7 @@ const app = new Elysia()
   .onError(({ code, error, path, set }) => {
     const statusCode = code === 'NOT_FOUND' ? 404 : code === 'VALIDATION' ? 400 : 500
     set.status = statusCode
-    return { statusCode, message: error?.message ?? code, date: new Date().toISOString(), source: path, data: null }
+    return { statusCode, message: error?.message ?? code, date: DateTime.utc().toISO(), source: path, data: null }
   })
   .get('/health', () => ({ status: 'ok' }))
   .listen(Number(process.env.PORT) || 3000)
