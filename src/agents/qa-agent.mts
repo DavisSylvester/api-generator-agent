@@ -267,6 +267,9 @@ export class QaAgent extends BaseAgent<QaInput, QaResult> {
       return;
     }
 
+    // Always include @types/bun for type resolution in tests
+    thirdParty.add(`@types/bun`);
+
     const pkgJsonPath = join(taskDir, `package.json`);
     let existingDeps = new Set<string>();
 

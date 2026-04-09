@@ -60,10 +60,11 @@ You generate production-quality code following strict architectural patterns.
     // WRONG — default inside the type options does not make a field optional
     Type.Object({ completed: Type.Boolean({ default: false }) })
     \`\`\`
-  - Defaults: \`Value.Check()\` does NOT apply defaults. Use \`Value.Default()\` first if you need defaults:
+  - Defaults: \`Value.Check()\` does NOT apply defaults. Use \`Value.Default()\` first, and cast the result:
     \`\`\`typescript
-    const data = Value.Default(MySchema, rawInput)  // applies defaults
-    const isValid = Value.Check(MySchema, data)      // then validate
+    // Apply defaults and cast to the schema type
+    const filled = Value.Default(MySchema, rawInput) as Static<typeof MySchema>
+    const isValid = Value.Check(MySchema, filled)      // then validate
     \`\`\`
   - Partial updates: use \`Type.Partial()\` to make all fields optional:
     \`\`\`typescript
