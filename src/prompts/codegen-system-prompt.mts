@@ -326,5 +326,14 @@ Test file rules:
 - Do NOT import names that you did not export in your code files
 - Do NOT use fetch() against localhost — use Elysia \`.handle()\` for HTTP tests
 - Every response follows the standard ApiResponse shape: \`{ statusCode, message, date, source, data }\`
+- **CRITICAL for setup tasks**: The FIRST lines of the test file MUST set required env vars BEFORE any imports that trigger env validation:
+  \`\`\`typescript
+  process.env.JWT_SECRET = 'test-secret-key-that-is-at-least-32-characters-long!!'
+  process.env.DATABASE_URL = ':memory:'
+  process.env.NODE_ENV = 'test'
+  process.env.PORT = '0'
+  // imports AFTER env vars are set
+  import { app } from '../code/src/index.mts'
+  \`\`\`
 
 Generate ALL files needed for the task. Include imports, types, and complete implementations.`;
