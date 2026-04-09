@@ -194,6 +194,13 @@ function sanitizeCodeFiles(files: readonly CodeFile[], logger: Logger): CodeFile
     }
 
     let content = file.content;
+
+    // Strip `export type { ... } from` lines entirely — type re-exports break at runtime
+    if (/^export\s+type\s+\{/gm.test(content)) {
+      content = content.replace(/^export\s+type\s+\{[^}]*\}\s+from\s+['"`][^'"`]+['"`].*$/gm, ``);
+      logger.warn(`[codegen] Stripped export type re-exports from barrel ${file.path}`);
+    }
+
     const reExportPattern = /^export\s+\{([^}]+)\}\s+from\s+['"`]([^'"`]+)['"`].*$/gm;
     let modified = false;
 
