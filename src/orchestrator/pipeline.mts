@@ -17,6 +17,7 @@ import { runFixLoop } from './fix-loop.mts';
 import { runFallbackFixLoop } from './fallback-fix-loop.mts';
 import type { FallbackTier } from '../config/fallback-tiers.mts';
 import type { OllamaFactory } from '../llm/ollama-factory.mts';
+import { tokenTracker } from '../llm/token-tracker.mts';
 import type { PlanningAgent } from '../agents/planning-agent.mts';
 import type { CodegenAgent } from '../agents/codegen-agent.mts';
 import type { EslintAgent } from '../agents/eslint-agent.mts';
@@ -207,11 +208,20 @@ export async function runPipeline(
   const completedCount = allStatesArr.filter((s) => s.status === 'completed').length;
   const failedCount = allStatesArr.filter((s) => s.status === 'failed').length;
   const skippedCount = allStatesArr.filter((s) => s.status === 'skipped').length;
+  const hardFailures = allStatesArr.filter((s) => s.lastError?.includes(`HARD FAILURE`));
   logger.info(`Task execution complete: ${completedCount} completed, ${failedCount} failed, ${skippedCount} skipped (of ${taskGraph.tasks.length})`);
 
   for (const state of allStatesArr) {
     const icon = state.status === 'completed' ? 'OK' : state.status === 'failed' ? 'FAIL' : 'SKIP';
     logger.info(`  [result] [${icon}] ${state.taskId} — ${state.iteration} iterations${state.lastError ? ` — ${state.lastError}` : ''}`);
+  }
+
+  // Hard failure check — if any task hit HARD FAILURE, log and exit with error
+  if (hardFailures.length > 0) {
+    for (const hf of hardFailures) {
+      logger.error(`  [HARD FAILURE] ${hf.taskId}: ${hf.lastError}`);
+    }
+    logger.error(`Pipeline has ${hardFailures.length} HARD FAILURE(s) that need human help to resolve.`);
   }
 
   // Write execution summary
@@ -304,6 +314,59 @@ export async function runPipeline(
     }
   }
 
+  // Phase 4: Generate architecture diagrams via diagram-agent
+  logger.info(`Phase 4: Generating architecture diagrams`);
+  try {
+    // Build a system description from the PRD + task results for the diagram agent
+    const diagramInput = [
+      `# System Architecture Description`,
+      ``,
+      `## PRD Summary`,
+      prdText.substring(0, 3000),
+      ``,
+      `## Generated Components`,
+      ...taskGraph.tasks.map((t) => `- **${t.name}** (${t.type}): ${t.description.substring(0, 100)}`),
+      ``,
+      `## Task Dependencies`,
+      ...taskGraph.tasks.filter((t) => t.dependsOn.length > 0).map((t) => `- ${t.id} depends on: ${t.dependsOn.join(`, `)}`),
+      ``,
+      `## Technology Stack`,
+      `- Runtime: BunJS`,
+      `- Framework: Elysia`,
+      `- Database: MongoDB (Docker)`,
+      `- Auth: JWT via jose + Elysia .resolve() pattern`,
+      `- Validation: TypeBox`,
+      `- Testing: bun:test against real MongoDB`,
+    ].join(`\n`);
+
+    const diagramDescPath = `${workspace.root}/diagram-input.md`;
+    const diagramOutputDir = `${workspace.outputDir()}/graphs`;
+    await writeFile(diagramDescPath, diagramInput, `utf-8`);
+
+    const DIAGRAM_AGENT_PATH = `C:/projects/davis/agents/diagram-agent/src/index.mts`;
+    const diagramProc = Bun.spawn([`bun`, `run`, DIAGRAM_AGENT_PATH, diagramDescPath, diagramOutputDir], {
+      stdout: `pipe`,
+      stderr: `pipe`,
+      env: { ...Bun.env },
+      cwd: `C:/projects/davis/agents/diagram-agent`,
+    });
+
+    const [diagramStdout, diagramStderr] = await Promise.all([
+      new Response(diagramProc.stdout).text(),
+      new Response(diagramProc.stderr).text(),
+    ]);
+    const diagramExit = await diagramProc.exited;
+
+    if (diagramExit === 0) {
+      logger.info(`[pipeline] Architecture diagrams generated at ${diagramOutputDir}`);
+    } else {
+      logger.warn(`[pipeline] Diagram generation failed (exit ${diagramExit}): ${diagramStderr.substring(0, 500)}`);
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    logger.warn(`[pipeline] Diagram generation skipped: ${msg}`);
+  }
+
   // Clean up MongoDB Docker container
   try {
     await QaAgent.stopMongoDB(logger);
@@ -315,6 +378,20 @@ export async function runPipeline(
   const durationMs = Math.round(performance.now() - startMs);
 
   logger.info(`Pipeline complete in ${durationMs}ms`);
+
+  // Token usage summary
+  const tokenUsage = tokenTracker.getCumulative();
+  logger.info(`═══ TOKEN USAGE ═══`);
+  logger.info(`  Prompt tokens:     ${tokenUsage.promptTokens.toLocaleString()}`);
+  logger.info(`  Completion tokens: ${tokenUsage.completionTokens.toLocaleString()}`);
+  logger.info(`  Total tokens:      ${tokenUsage.totalTokens.toLocaleString()}`);
+  logger.info(`═══════════════════`);
+
+  // Write token usage to disk
+  await writeJson(`${workspace.root}/token-usage.json`, {
+    cumulative: tokenUsage,
+    history: tokenTracker.getHistory(),
+  });
 
   // Write final pipeline result
   await writeJson(`${workspace.root}/pipeline-result.json`, {

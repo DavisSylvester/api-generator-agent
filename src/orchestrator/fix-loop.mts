@@ -16,6 +16,7 @@ import { createCodegenUserPrompt } from '../prompts/create-codegen-user-prompt.m
 import { createFixPrompt } from '../prompts/create-fix-prompt.mts';
 import { validateImports, validateNamedExports } from '../validators/import-validator.mts';
 import { extractExports } from '../validators/extract-exports.mts';
+import { tokenTracker } from '../llm/token-tracker.mts';
 
 const MUST_OUTPUT_CODE_BLOCKS = `You MUST output fenced code blocks. Do NOT write explanations or analysis without code. Every response MUST contain at least one fenced code block with a file path.`;
 
@@ -73,6 +74,13 @@ export async function runFixLoop(
     // Build a compact summary for fix mode — just file paths + exported names, not full code
     existingCodeSummary = buildDependencySummary(depCodeFiles);
   }
+
+  // Circuit breaker: track error counts. If errors don't decrease for CIRCUIT_BREAKER_STALE_LIMIT
+  // consecutive iterations, break immediately to avoid burning cycles.
+  const CIRCUIT_BREAKER_STALE_LIMIT = 5;
+  let staleErrorCount = 0;
+  let previousErrorCount = Infinity;
+  let circuitBroken = false;
 
   for (let iteration = 0; iteration < config.maxIterations; iteration++) {
     const iterStartMs = performance.now();
@@ -324,9 +332,11 @@ export async function runFixLoop(
       continue;
     }
 
-    // Named export validation — catch mismatched imports/re-exports before QA
-    const allCodeForValidation = [...codeFiles, ...depCodeFiles];
-    const exportErrors = validateNamedExports(allCodeForValidation, logger);
+    // Named export validation — only validate the TASK's own generated files
+    // Dep files were already validated when their own tasks passed. Including them
+    // here causes false positives when dep files import from indirect dependencies
+    // that aren't in this task's scope.
+    const exportErrors = validateNamedExports(codeFiles, logger);
     if (exportErrors.length > 0) {
       logger.warn(`[fix-loop] Named export validation found ${exportErrors.length} issues — skipping QA`);
       await writeJson(`${iterDir}/import-export-errors.json`, exportErrors);
@@ -430,6 +440,7 @@ export async function runFixLoop(
 
     if (qa.passed) {
       logger.info(`[fix-loop] Task ${task.id} passed QA on iteration ${iteration + 1} (total: ${iterDurationMs}ms)`);
+      logger.info(`[fix-loop] ${tokenTracker.getSummary()}`);
 
       // Write final code
       logger.info(`[fix-loop] Writing ${codeFiles.length} final files for task ${task.id}`);
@@ -538,6 +549,20 @@ export async function runFixLoop(
       completedAt: new Date().toISOString(),
       result: 'failed',
     });
+
+    // Circuit breaker: if error count hasn't decreased for N consecutive iterations, break
+    const currentErrorCount = lastErrors.length;
+    if (currentErrorCount >= previousErrorCount) {
+      staleErrorCount++;
+      if (staleErrorCount >= CIRCUIT_BREAKER_STALE_LIMIT) {
+        logger.error(`[fix-loop] CIRCUIT BREAKER: Task ${task.id} stuck at ${currentErrorCount} errors for ${staleErrorCount} consecutive iterations — stopping`);
+        circuitBroken = true;
+        break;
+      }
+    } else {
+      staleErrorCount = 0;
+    }
+    previousErrorCount = currentErrorCount;
   }
 
   // Exhausted iterations — write best-effort code
@@ -567,17 +592,26 @@ export async function runFixLoop(
     await writeCode(outputPath, file.content);
   }
 
+  logger.info(`[fix-loop] Task ${task.id} exhausted — ${tokenTracker.getSummary()}`);
+
+  const failReason = circuitBroken
+    ? `Circuit breaker: stuck at same error count for ${CIRCUIT_BREAKER_STALE_LIMIT} iterations`
+    : `Exceeded ${config.maxIterations} fix iterations`;
+
   await writeJson(workspace.taskStatusPath(task.id), {
     status: 'failed',
     iteration: config.maxIterations,
-    lastError: `Exceeded ${config.maxIterations} fix iterations`,
+    lastError: failReason,
+    circuitBroken,
+    lastErrors: [...lastErrors].slice(0, 10),
   });
 
   return ok({
     taskId: task.id,
     status: 'failed',
     iteration: config.maxIterations,
-    lastError: `Exceeded ${config.maxIterations} fix iterations`,
+    lastError: failReason,
+    circuitBroken,
   });
 }
 

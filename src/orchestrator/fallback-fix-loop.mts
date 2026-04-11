@@ -11,6 +11,7 @@ import type { CodegenInput, CodegenOutput } from '../agents/codegen-agent.mts';
 import { runFixLoop } from './fix-loop.mts';
 import type { FixLoopDeps, FixLoopConfig } from './fix-loop.mts';
 import { writeFile, mkdir, readFile } from 'node:fs/promises';
+import { runDiagnosticFix } from './diagnostic-fix.mts';
 
 const MUST_OUTPUT_CODE_BLOCKS = `You MUST output fenced code blocks. Do NOT write explanations or analysis without code. Every response MUST contain at least one fenced code block with a file path.`;
 
@@ -56,9 +57,10 @@ export async function runFallbackFixLoop(
     return primaryResult;
   }
 
-  // Primary failed — collect error context for fallback tiers
+  // Primary failed — check circuit breaker
   const primaryError = primaryResult.ok ? primaryResult.value.lastError : primaryResult.error.message;
-  logger.warn(`[fallback] Primary codegen failed for task ${task.id}: ${primaryError}`);
+  const primaryCircuitBroken = primaryResult.ok ? primaryResult.value.circuitBroken : false;
+  logger.warn(`[fallback] Primary codegen failed for task ${task.id}: ${primaryError}${primaryCircuitBroken ? ` (CIRCUIT BROKEN)` : ``}`);
 
   // Read accumulated knowledge for this task
   let knowledgeContext = ``;
@@ -107,7 +109,37 @@ export async function runFallbackFixLoop(
     logger.warn(`[fallback] ${tier.name} also failed for task ${task.id}: ${tierError}`);
   }
 
-  // All tiers exhausted — return primary result
-  logger.error(`[fallback] All tiers exhausted for task ${task.id}`);
-  return primaryResult;
+  // All tiers exhausted — enter diagnostic mode
+  logger.error(`[fallback] All tiers exhausted for task ${task.id} — entering DIAGNOSTIC MODE`);
+
+  const lastErrors = primaryResult.ok && primaryResult.value.lastError
+    ? [primaryResult.value.lastError]
+    : [];
+
+  const diagnosticResult = await runDiagnosticFix(
+    task,
+    runId,
+    deps,
+    config.fallbackTiers,
+    lastErrors,
+    config.primaryConfig,
+    logger,
+  );
+
+  if (diagnosticResult.ok && diagnosticResult.value.status === `completed`) {
+    return diagnosticResult;
+  }
+
+  // Hard failure — diagnostic couldn't solve it either
+  const hardFailState = diagnosticResult.ok ? diagnosticResult.value : {
+    taskId: task.id,
+    status: `failed` as const,
+    iteration: 0,
+    lastError: `HARD FAILURE: All models and diagnostic attempts exhausted. This task needs human help to resolve.`,
+    circuitBroken: true,
+  };
+
+  // Signal hard failure to the pipeline
+  logger.error(`[fallback] HARD FAILURE for task ${task.id} — exiting with error`);
+  return { ok: true, value: hardFailState };
 }

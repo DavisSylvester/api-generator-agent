@@ -260,6 +260,7 @@ When your task has dependencies (shown in "Available Code from Dependencies"), y
 4. Example barrel: \`export { UserService } from './user-service.mts'\`
 5. Barrels MUST only re-export runtime values (const, function, class) — NOT type aliases
 6. Do NOT use \`export type X = Static<typeof Schema>\` — it breaks barrel re-exports at runtime. Callers derive types with \`Static<typeof Schema>\` directly where needed.
+7. **CRITICAL: Barrels MUST only re-export files YOUR task generated.** Do NOT re-export dependency types, schemas, or classes from upstream tasks. Those are available via their own barrels. Re-exporting files you did not generate causes import validation failures because the files don't exist in your task's output.
 
 ## Async/Await Rules
 1. All route handlers that call services or repositories MUST be \`async\` and use \`await\`

@@ -70,7 +70,7 @@ export class CodegenAgent extends BaseAgent<CodegenInput, CodegenOutput> {
     ];
 
     this.logger.info(`[codegen] Sending prompt to LLM (${userPrompt.length} chars) (streaming)`);
-    const content = await streamInvoke(chatModel, messages, traceConfig);
+    const content = await streamInvoke(chatModel, messages, traceConfig, { model: traceConfig.model as string, taskId: input.taskId });
 
     this.logger.debug(`[codegen] LLM response received (${content.length} chars)`);
 

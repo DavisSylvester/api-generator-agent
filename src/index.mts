@@ -85,6 +85,17 @@ async function main(): Promise<void> {
 
   logger.info(`Workspace: .workspace/${pipeline.runId}/`);
 
+  const hardFailures = pipeline.taskStates.filter((s) => s.lastError?.includes(`HARD FAILURE`));
+  if (hardFailures.length > 0) {
+    logger.error(`\n${'═'.repeat(60)}`);
+    logger.error(`HARD FAILURE — ${hardFailures.length} task(s) need human help:`);
+    for (const hf of hardFailures) {
+      logger.error(`  - ${hf.taskId}: ${hf.lastError}`);
+    }
+    logger.error(`${'═'.repeat(60)}`);
+    process.exit(2);
+  }
+
   if (failed > 0) {
     process.exit(1);
   }
