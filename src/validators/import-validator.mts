@@ -191,7 +191,7 @@ export function validateNamedExports(
 
       const resolved = resolveAndFindFile(sourceDir, importPath, allFiles);
       if (!resolved) {
-        // File doesn't exist — already caught by validateImports, skip
+        // File not in scope — may be from indirect dependency or already caught by validateImports
         continue;
       }
 
@@ -219,6 +219,8 @@ export function validateNamedExports(
     }
 
     // Check re-exports: export { A, B } from './path.mts'
+    // For barrels, be lenient: if the re-export target file doesn't exist in the current scope
+    // (it may come from an indirect dependency not in depCodeFiles), skip the check rather than erroring.
     const reExportMatches = file.content.matchAll(RE_EXPORT_PATTERN);
     for (const match of reExportMatches) {
       const namesStr = match[1]!;
@@ -226,6 +228,10 @@ export function validateNamedExports(
 
       const resolved = resolveAndFindFile(sourceDir, importPath, allFiles);
       if (!resolved) {
+        // File not in scope — may be from an indirect dependency. Skip, don't error.
+        logger.debug(
+          `[import-validator] Re-export target not in scope: ${file.path} re-exports from '${importPath}' — skipping (may be indirect dep)`,
+        );
         continue;
       }
 

@@ -487,6 +487,17 @@ async function handleLegacyMode(
   logger.info(`Tokens: ${costSummary.totalInputTokens.toLocaleString()} input, ${costSummary.totalOutputTokens.toLocaleString()} output`);
   logger.info(`Total cost: $${costSummary.totalCost.toFixed(4)}`);
 
+  const hardFailures = result.value.taskStates.filter((s) => s.lastError?.includes(`HARD FAILURE`));
+  if (hardFailures.length > 0) {
+    logger.error(`\n${'═'.repeat(60)}`);
+    logger.error(`HARD FAILURE — ${hardFailures.length} task(s) need human help:`);
+    for (const hf of hardFailures) {
+      logger.error(`  - ${hf.taskId}: ${hf.lastError}`);
+    }
+    logger.error(`${'═'.repeat(60)}`);
+    process.exit(2);
+  }
+
   const failed = result.value.taskStates.filter((s) => s.status === "failed").length;
   if (failed > 0) {
     process.exit(1);

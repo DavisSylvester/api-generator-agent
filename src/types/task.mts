@@ -22,4 +22,5 @@ export interface TaskState {
   readonly status: TaskStatus;
   readonly iteration: number;
   readonly lastError?: string;
+  readonly circuitBroken?: boolean;
 }

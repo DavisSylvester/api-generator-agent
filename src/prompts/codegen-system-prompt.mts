@@ -497,9 +497,12 @@ When your task has dependencies (shown in "Available Code from Dependencies"), y
 ## Barrel File Rule
 1. Every directory containing multiple \`.mts\` files MUST have an \`index.mts\` barrel that re-exports all public symbols
 2. All cross-directory imports MUST use the barrel (\`index.mts\`), not direct file paths
-3. Example barrel: \`export { UserService } from './user-service.mts'\`
-4. Barrels MUST only re-export runtime values (const, function, class) — NOT type aliases
-5. Do NOT use \`export type X = ...\` in barrel files
+3. Intra-directory imports (within the same folder) may reference the file directly
+4. Example barrel: \`export { UserService } from './user-service.mts'\`
+5. Barrels MUST only re-export runtime values (const, function, class) — NOT type aliases
+6. Do NOT use \`export type X = ...\` in barrel files
+7. Do NOT use \`export type X = Static<typeof Schema>\` — it breaks barrel re-exports at runtime. Callers derive types with \`Static<typeof Schema>\` directly where needed.
+8. **CRITICAL: Barrels MUST only re-export files YOUR task generated.** Do NOT re-export dependency types, schemas, or classes from upstream tasks. Those are available via their own barrels. Re-exporting files you did not generate causes import validation failures because the files don't exist in your task's output.
 
 ## Async/Await Rules
 1. All route handlers that call services or repositories MUST be \`async\` and use \`await\`
