@@ -108,14 +108,14 @@ describe("L3 Compilation Tests", () => {
         expect(content).not.toContain("any");
       });
 
-      it("should generate validation schema with zod imports", async () => {
+      it("should generate validation schema with TypeBox imports", async () => {
         const entity = fixture.entities[0]!;
         const kebab = entity.name.toLowerCase().replace(/\s+/g, "-");
         const path = join(tmpDir, "src", "features", fixture.domain, "validation", `${kebab}.validation.mts`);
         const content = await readFile(path, "utf-8");
-        expect(content).toContain('import { z } from "zod"');
-        expect(content).toContain("z.object");
-        expect(content).toContain("z.infer");
+        expect(content).toContain('import { Type, Static } from "@sinclair/typebox"');
+        expect(content).toContain("Type.Object");
+        expect(content).toContain("Static<typeof");
       });
 
       it("should generate repository with ulid import", async () => {

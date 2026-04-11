@@ -1,21 +1,21 @@
 import type { IEntitySpec, IFieldSpec } from "../../src/core/interfaces/index.mts";
 
-function mapZodType(field: IFieldSpec): string {
+function mapTypeBoxType(field: IFieldSpec): string {
   const typeMap: Record<string, string> = {
-    "string": "z.string()",
-    "number": "z.number()",
-    "boolean": "z.boolean()",
-    "date": "z.string().datetime()",
-    "datetime": "z.string().datetime()",
-    "email": "z.string().email()",
-    "url": "z.string().url()",
-    "uuid": "z.string().ulid()",
-    "ulid": "z.string().ulid()",
-    "object": "z.record(z.string(), z.unknown())",
-    "array": "z.array(z.unknown())",
+    "string": "Type.String()",
+    "number": "Type.Number()",
+    "boolean": "Type.Boolean()",
+    "date": "Type.String({ format: \"date-time\" })",
+    "datetime": "Type.String({ format: \"date-time\" })",
+    "email": "Type.String({ pattern: \"^[\\\\w.-]+@[\\\\w.-]+\\\\.[a-zA-Z]{2,}$\" })",
+    "url": "Type.String({ format: \"uri\" })",
+    "uuid": "Type.String({ minLength: 26, maxLength: 26 })",
+    "ulid": "Type.String({ minLength: 26, maxLength: 26 })",
+    "object": "Type.Record(Type.String(), Type.Unknown())",
+    "array": "Type.Array(Type.Unknown())",
   };
-  const base = typeMap[field.type.toLowerCase()] ?? "z.string()";
-  return field.required ? base : `${base}.optional()`;
+  const base = typeMap[field.type.toLowerCase()] ?? "Type.String()";
+  return field.required ? base : `Type.Optional(${base})`;
 }
 
 export function renderValidationSchema(entity: IEntitySpec, domain: string): string {
@@ -24,43 +24,43 @@ export function renderValidationSchema(entity: IEntitySpec, domain: string): str
 
   const createFields = entity.fields
     .filter((f) => f.name !== "id" && f.name !== "createdAt" && f.name !== "updatedAt")
-    .map((f) => `  ${f.name}: ${mapZodType(f)},`)
+    .map((f) => `  ${f.name}: ${mapTypeBoxType(f)},`)
     .join("\n");
 
   const updateFields = entity.fields
     .filter((f) => f.name !== "id" && f.name !== "createdAt" && f.name !== "updatedAt")
     .map((f) => {
-      const base = mapZodType(f);
-      return `  ${f.name}: ${base.includes(".optional()") ? base : `${base}.optional()`},`;
+      const base = mapTypeBoxType(f);
+      return `  ${f.name}: ${base.startsWith("Type.Optional(") ? base : `Type.Optional(${base})`},`;
     })
     .join("\n");
 
-  return `import { z } from "zod";
+  return `import { Type, Static } from "@sinclair/typebox";
 
-export const create${pascal}Schema = z.object({
+export const create${pascal}Schema = Type.Object({
 ${createFields}
 });
 
-export type Create${pascal}Input = z.infer<typeof create${pascal}Schema>;
+export type Create${pascal}Input = Static<typeof create${pascal}Schema>;
 
-export const update${pascal}Schema = z.object({
+export const update${pascal}Schema = Type.Object({
 ${updateFields}
 });
 
-export type Update${pascal}Input = z.infer<typeof update${pascal}Schema>;
+export type Update${pascal}Input = Static<typeof update${pascal}Schema>;
 
-export const ${toCamelCase(entity.name)}IdParamSchema = z.object({
-  id: z.string().ulid(),
+export const ${toCamelCase(entity.name)}IdParamSchema = Type.Object({
+  id: Type.String({ minLength: 26, maxLength: 26 }),
 });
 
-export type ${pascal}IdParam = z.infer<typeof ${toCamelCase(entity.name)}IdParamSchema>;
+export type ${pascal}IdParam = Static<typeof ${toCamelCase(entity.name)}IdParamSchema>;
 
-export const ${toCamelCase(entity.name)}QuerySchema = z.object({
-  page: z.coerce.number().int().min(1).default(1),
-  limit: z.coerce.number().int().min(1).max(100).default(20),
+export const ${toCamelCase(entity.name)}QuerySchema = Type.Object({
+  page: Type.Optional(Type.Integer({ minimum: 1, default: 1 })),
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100, default: 20 })),
 });
 
-export type ${pascal}Query = z.infer<typeof ${toCamelCase(entity.name)}QuerySchema>;
+export type ${pascal}Query = Static<typeof ${toCamelCase(entity.name)}QuerySchema>;
 `;
 }
 

@@ -63,10 +63,11 @@ describe("GenerationEngine", () => {
       expect(parsed.name).toBe("@test-project/api");
     });
 
-    it("should generate env.mts with Zod validation", async () => {
+    it("should generate env.mts with TypeBox validation", async () => {
       await engine.generateAll(sampleFeatures);
       const envContent = await readFile(join(tmpDir, "src", "env.mts"), "utf-8");
-      expect(envContent).toContain("z.object");
+      expect(envContent).toContain("Type.Object");
+      expect(envContent).toContain("Value.Check");
       expect(envContent).toContain("loadEnv");
     });
 

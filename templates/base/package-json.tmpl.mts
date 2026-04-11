@@ -19,8 +19,8 @@ export function renderPackageJson(projectName: string): string {
       "elysia": "^1.3.0",
       "mongodb": "^6.15.0",
       "ulid": "^2.3.0",
+      "@sinclair/typebox": "^0.34.0",
       "winston": "^3.19.0",
-      "zod": "^3.25.0",
     },
     devDependencies: {
       "@types/bun": "latest",

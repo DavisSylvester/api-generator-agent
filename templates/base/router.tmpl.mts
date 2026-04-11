@@ -7,6 +7,7 @@ export function renderRouter(entity: IEntitySpec, domain: string): string {
   const pluralKebab = toKebabCase(entity.pluralName);
 
   return `import { Elysia, t } from "elysia";
+import { Value } from "@sinclair/typebox/value";
 import type { Logger } from "winston";
 import type { ${pascal}Service } from "../service/${kebab}-service.mjs";
 import {
@@ -15,6 +16,7 @@ import {
   ${camel}IdParamSchema,
   ${camel}QuerySchema,
 } from "../validation/${kebab}.validation.mjs";
+import type { Create${pascal}Input, Update${pascal}Input, ${pascal}IdParam, ${pascal}Query } from "../validation/${kebab}.validation.mjs";
 
 export function create${pascal}Router(
   logger: Logger,
@@ -23,8 +25,12 @@ export function create${pascal}Router(
   return new Elysia({ prefix: "/v1/${pluralKebab}" })
     .post("/", async ({ body, set }) => {
       try {
-        const parsed = create${pascal}Schema.parse(body);
-        const result = await service.create(parsed);
+        if (!Value.Check(create${pascal}Schema, body)) {
+          const errors = [...Value.Errors(create${pascal}Schema, body)];
+          set.status = 400;
+          return { success: false, error: errors.map((e) => e.message).join(", ") };
+        }
+        const result = await service.create(body as Create${pascal}Input);
         set.status = 201;
         return { success: true, data: result };
       } catch (error) {
@@ -36,8 +42,10 @@ export function create${pascal}Router(
     })
     .get("/", async ({ query, set }) => {
       try {
-        const parsed = ${camel}QuerySchema.parse(query);
-        const result = await service.findAll(parsed.page, parsed.limit);
+        const defaulted = Value.Default(${camel}QuerySchema, query) as ${pascal}Query;
+        const page = Number(defaulted.page ?? 1);
+        const limit = Number(defaulted.limit ?? 20);
+        const result = await service.findAll(page, limit);
         return { success: true, data: result.data, count: result.total };
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
@@ -48,8 +56,11 @@ export function create${pascal}Router(
     })
     .get("/:id", async ({ params, set }) => {
       try {
-        const parsed = ${camel}IdParamSchema.parse(params);
-        const result = await service.findById(parsed.id);
+        if (!Value.Check(${camel}IdParamSchema, params)) {
+          set.status = 400;
+          return { success: false, error: "Invalid ID format" };
+        }
+        const result = await service.findById((params as ${pascal}IdParam).id);
         if (!result) {
           set.status = 404;
           return { success: false, error: "${pascal} not found" };
@@ -64,9 +75,16 @@ export function create${pascal}Router(
     })
     .put("/:id", async ({ params, body, set }) => {
       try {
-        const parsedParams = ${camel}IdParamSchema.parse(params);
-        const parsedBody = update${pascal}Schema.parse(body);
-        const result = await service.update(parsedParams.id, parsedBody);
+        if (!Value.Check(${camel}IdParamSchema, params)) {
+          set.status = 400;
+          return { success: false, error: "Invalid ID format" };
+        }
+        if (!Value.Check(update${pascal}Schema, body)) {
+          const errors = [...Value.Errors(update${pascal}Schema, body)];
+          set.status = 400;
+          return { success: false, error: errors.map((e) => e.message).join(", ") };
+        }
+        const result = await service.update((params as ${pascal}IdParam).id, body as Update${pascal}Input);
         if (!result) {
           set.status = 404;
           return { success: false, error: "${pascal} not found" };
@@ -81,13 +99,16 @@ export function create${pascal}Router(
     })
     .delete("/:id", async ({ params, set }) => {
       try {
-        const parsed = ${camel}IdParamSchema.parse(params);
-        const deleted = await service.delete(parsed.id);
+        if (!Value.Check(${camel}IdParamSchema, params)) {
+          set.status = 400;
+          return { success: false, error: "Invalid ID format" };
+        }
+        const deleted = await service.delete((params as ${pascal}IdParam).id);
         if (!deleted) {
           set.status = 404;
           return { success: false, error: "${pascal} not found" };
         }
-        return { success: true, data: { id: parsed.id, deleted: true } };
+        return { success: true, data: { id: (params as ${pascal}IdParam).id, deleted: true } };
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         logger.error(\`[${pascal}Router] DELETE /:id failed: \${msg}\`);

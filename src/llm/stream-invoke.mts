@@ -1,5 +1,7 @@
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import type { BaseMessage, AIMessageChunk } from '@langchain/core/messages';
+import type { Logger } from 'winston';
+import { retryWithBackoff, type RetryConfig } from './retry-with-backoff.mts';
 
 export interface StreamInvokeResult {
   readonly content: string;
@@ -7,16 +9,40 @@ export interface StreamInvokeResult {
   readonly outputTokens: number;
 }
 
+export interface StreamInvokeOptions {
+  readonly logger?: Logger;
+  readonly retryConfig?: RetryConfig;
+}
+
 export async function streamInvoke(
   chatModel: BaseChatModel,
   messages: readonly BaseMessage[],
   traceConfig: Record<string, unknown>,
+  options?: StreamInvokeOptions,
 ): Promise<string> {
-  const result = await streamInvokeWithUsage(chatModel, messages, traceConfig);
+  const result = await streamInvokeWithUsage(chatModel, messages, traceConfig, options);
   return result.content;
 }
 
 export async function streamInvokeWithUsage(
+  chatModel: BaseChatModel,
+  messages: readonly BaseMessage[],
+  traceConfig: Record<string, unknown>,
+  options?: StreamInvokeOptions,
+): Promise<StreamInvokeResult> {
+  const executeStream = async (): Promise<StreamInvokeResult> => {
+    return executeStreamInvoke(chatModel, messages, traceConfig);
+  };
+
+  if (options?.logger) {
+    const label = typeof traceConfig["run_name"] === "string" ? traceConfig["run_name"] : "stream-invoke";
+    return retryWithBackoff(executeStream, options.logger, label, options.retryConfig);
+  }
+
+  return executeStream();
+}
+
+async function executeStreamInvoke(
   chatModel: BaseChatModel,
   messages: readonly BaseMessage[],
   traceConfig: Record<string, unknown>,

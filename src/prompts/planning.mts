@@ -7,7 +7,7 @@ Each task should be a self-contained unit of work that produces one or more Type
 - Runtime: BunJS (latest)
 - Framework: Elysia
 - Language: TypeScript strict mode, .mts file extensions
-- Validation: Zod (for env config and request schemas)
+- Validation: TypeBox (\`@sinclair/typebox\`) — for env config and request schemas. Elysia's \`t\` import IS TypeBox — no extra dependency needed for route-level validation.
 - IDs: ulid (via the \`ulid\` npm package — NOT uuid or ObjectId)
 - Logging: Winston (structured logger via createLogger())
 - Database: MongoDB via the \`mongodb\` npm package (native driver) — NOT mongoose
@@ -18,13 +18,13 @@ Each task should be a self-contained unit of work that produces one or more Type
 
 ## Task Types
 - setup: Project scaffolding, config files, DI container setup, MongoDB connection
-  - Produces: src/index.mts, src/env.mts (Zod singleton), src/ioc/get-container.mts,
+  - Produces: src/index.mts, src/env.mts (TypeBox singleton with Value.Check), src/ioc/get-container.mts,
     src/ioc/create-database-configuration.mts, src/ioc/interfaces/i-container.mts,
     src/loggers/logger.mts (Winston createLogger factory), src/api/plugins/trace.plugin.mts (ULID traceId),
     src/types/result.mts (Result<T,E> with ok/err helpers), docker-compose.yml
-- model: Zod schemas, z.infer<> derived types, and interfaces for a domain entity
+- model: TypeBox schemas, Static<typeof> derived types, and interfaces for a domain entity
   - Produces files in \`src/features/{domain}/interfaces/\` (i-*.mts, one per file) and
-    \`src/features/{domain}/validation/\` (*.validation.mts with Zod schemas)
+    \`src/features/{domain}/validation/\` (*.validation.mts with TypeBox schemas)
     with barrel index.mts files in each directory
 - repository: Data access layer — extends BaseRepository, uses ulid for IDs, returns Result<T, E>
   - Produces: \`src/features/{domain}/repository/{entity}-repository.mts\` + barrel index.mts
@@ -47,7 +47,7 @@ Each task should be a self-contained unit of work that produces one or more Type
 - BaseRepository: abstract class with constructor(db, collectionName, logger) and abstract ensureIndexes()
 - Controllers handle HTTP only (return { success, data, count } or { success: false, error })
 - Services handle business logic
-- Zod for all validation (env config AND request schemas)
+- TypeBox for all validation (env config AND request schemas) — use \`Type.Object\`, \`Type.String\`, \`Static<typeof>\`, \`Value.Check\`
 - ULID for all entity IDs (NOT ObjectId, NOT uuid)
 - Winston for structured logging (no console.log)
 - Routes always under /v1/ (e.g., /v1/users, /v1/orders)
@@ -57,7 +57,7 @@ Each task should be a self-contained unit of work that produces one or more Type
 ## Feature Folder Structure
 Each domain feature lives under src/features/{domain}/:
 - interfaces/     — i-{entity}.mts (one interface per file), index.mts barrel
-- validation/     — {entity}.validation.mts (Zod schemas + z.infer<> types), index.mts barrel
+- validation/     — {entity}.validation.mts (TypeBox schemas + Static<typeof> types), index.mts barrel
 - repository/     — {entity}-repository.mts (extends BaseRepository), index.mts barrel
 - service/        — {entity}-service.mts, i-{entity}-service.mts, index.mts barrel
 - docs/           — {entity}-swagger.mts (swagger detail objects for routes)
@@ -84,7 +84,7 @@ You MUST respond with valid JSON matching this exact structure:
 1. There MUST be exactly ONE root task with id \`setup-foundation\`, type=setup, dependsOn=[].
 2. \`setup-foundation\` produces ONLY:
    - src/index.mts (Elysia app with @elysiajs/openapi + cors + tracePlugin + .listen())
-   - src/env.mts (Zod-validated Bun.env singleton — loadEnv() + exported env constant)
+   - src/env.mts (TypeBox-validated Bun.env singleton — loadEnv() + exported env constant)
    - src/ioc/get-container.mts (getContainer() factory returning IContainer)
    - src/ioc/create-database-configuration.mts
    - src/ioc/interfaces/i-container.mts
@@ -126,5 +126,6 @@ ${prdText}
 Generate the task list as JSON. Ensure tasks are ordered correctly and dependencies are explicit.
 Use feature-based folder structure (src/features/{domain}/).
 All IDs use ULID. All routes use /v1/ prefix. Use @elysiajs/openapi for docs.
-Setup task generates src/env.mts (Zod singleton), src/ioc/get-container.mts, docker-compose.yml.`;
+Setup task generates src/env.mts (TypeBox singleton), src/ioc/get-container.mts, docker-compose.yml.
+All validation uses TypeBox (Type.Object, Type.String, Static<typeof>, Value.Check) — NOT Zod.`;
 }

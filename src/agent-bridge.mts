@@ -152,7 +152,7 @@ async function handleGenerateFromBridge(
     documentationAgent: container.documentationAgent,
     logger: container.logger,
     fallbackTiers: container.fallbackTiers,
-    localFactory: container.localFactory,
+    primaryFactory: container.primaryFactory,
   });
 
   if (!result.ok) {
@@ -212,7 +212,7 @@ async function handleResumeFromBridge(
     documentationAgent: container.documentationAgent,
     logger: container.logger,
     fallbackTiers: container.fallbackTiers,
-    localFactory: container.localFactory,
+    primaryFactory: container.primaryFactory,
   });
 
   if (!result.ok) {

@@ -1,26 +1,32 @@
 export function renderEnvConfig(projectName: string): string {
   const dbName = toKebabCase(projectName);
 
-  return `import { z } from "zod";
+  return `import { Type, Static } from "@sinclair/typebox";
+import { Value } from "@sinclair/typebox/value";
 
-const envSchema = z.object({
-  PORT: z.coerce.number().int().min(1).max(65535).default(3000),
-  MONGODB_URI: z.string().url().default("mongodb://localhost:27017/${dbName}"),
-  NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
-  JWT_SECRET: z.string().min(32).default("dev-secret-key-that-is-at-least-32-chars"),
+const envSchema = Type.Object({
+  PORT: Type.Optional(Type.String({ default: "3000" })),
+  MONGODB_URI: Type.Optional(Type.String({ default: "mongodb://localhost:27017/${dbName}" })),
+  NODE_ENV: Type.Optional(Type.Union([
+    Type.Literal("development"),
+    Type.Literal("test"),
+    Type.Literal("production"),
+  ], { default: "development" })),
+  JWT_SECRET: Type.Optional(Type.String({ minLength: 32, default: "dev-secret-key-that-is-at-least-32-chars" })),
 });
 
-export type EnvConfig = z.infer<typeof envSchema>;
+export type EnvConfig = Static<typeof envSchema>;
 
 export function loadEnv(): EnvConfig {
-  const result = envSchema.safeParse(Bun.env);
-  if (!result.success) {
-    const formatted = result.error.issues
-      .map((i) => \`  \${i.path.join(".")}: \${i.message}\`)
+  const raw = Value.Default(envSchema, { ...Bun.env });
+  if (!Value.Check(envSchema, raw)) {
+    const errors = [...Value.Errors(envSchema, raw)];
+    const formatted = errors
+      .map((e) => \`  \${e.path}: \${e.message}\`)
       .join("\\n");
     throw new Error(\`Environment validation failed:\\n\${formatted}\`);
   }
-  return result.data;
+  return raw as EnvConfig;
 }
 
 export const env = loadEnv();
@@ -37,8 +43,8 @@ export interface DatabaseConfig {
 
 export function createDatabaseConfiguration(): DatabaseConfig {
   return {
-    uri: env.MONGODB_URI,
-    dbName: new URL(env.MONGODB_URI).pathname.replace("/", "") || "my-app",
+    uri: env.MONGODB_URI ?? "mongodb://localhost:27017/my-app",
+    dbName: new URL(env.MONGODB_URI ?? "mongodb://localhost:27017/my-app").pathname.replace("/", "") || "my-app",
   };
 }
 `;

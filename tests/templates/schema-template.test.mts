@@ -17,25 +17,25 @@ const sampleEntity: IEntitySpec = {
 
 describe("schema.tmpl", () => {
   describe("renderValidationSchema", () => {
-    it("should render create and update Zod schemas", () => {
+    it("should render create and update TypeBox schemas", () => {
       const output = renderValidationSchema(sampleEntity, "work-orders");
-      expect(output).toContain("import { z } from \"zod\"");
+      expect(output).toContain("import { Type, Static } from \"@sinclair/typebox\"");
       expect(output).toContain("createWorkOrderSchema");
       expect(output).toContain("updateWorkOrderSchema");
     });
 
-    it("should render correct Zod types for fields", () => {
+    it("should render correct TypeBox types for fields", () => {
       const output = renderValidationSchema(sampleEntity, "work-orders");
-      expect(output).toContain("z.string()");
-      expect(output).toContain("z.string().email()");
-      expect(output).toContain("z.number()");
-      expect(output).toContain("z.boolean()");
+      expect(output).toContain("Type.String()");
+      expect(output).toContain("Type.String({ pattern:");
+      expect(output).toContain("Type.Number()");
+      expect(output).toContain("Type.Boolean()");
     });
 
-    it("should render id param schema using ulid", () => {
+    it("should render id param schema with string length constraints", () => {
       const output = renderValidationSchema(sampleEntity, "work-orders");
       expect(output).toContain("workOrderIdParamSchema");
-      expect(output).toContain("z.string().ulid()");
+      expect(output).toContain("Type.String({ minLength: 26, maxLength: 26 })");
     });
 
     it("should render query schema with pagination", () => {
@@ -45,17 +45,25 @@ describe("schema.tmpl", () => {
       expect(output).toContain("limit:");
     });
 
-    it("should derive types with z.infer", () => {
+    it("should derive types with Static<typeof>", () => {
       const output = renderValidationSchema(sampleEntity, "work-orders");
-      expect(output).toContain("z.infer<typeof createWorkOrderSchema>");
-      expect(output).toContain("z.infer<typeof updateWorkOrderSchema>");
+      expect(output).toContain("Static<typeof createWorkOrderSchema>");
+      expect(output).toContain("Static<typeof updateWorkOrderSchema>");
     });
 
     it("should make optional fields optional in update schema", () => {
       const output = renderValidationSchema(sampleEntity, "work-orders");
-      // All fields in update schema should have .optional()
+      // All fields in update schema should have Type.Optional
       const updateSection = output.split("updateWorkOrderSchema")[1];
-      expect(updateSection).toContain(".optional()");
+      expect(updateSection).toContain("Type.Optional(");
+    });
+
+    it("should NOT contain any Zod references", () => {
+      const output = renderValidationSchema(sampleEntity, "work-orders");
+      expect(output).not.toContain("from \"zod\"");
+      expect(output).not.toContain("z.object");
+      expect(output).not.toContain("z.string");
+      expect(output).not.toContain("z.infer");
     });
   });
 

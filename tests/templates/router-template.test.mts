@@ -45,7 +45,13 @@ describe("router.tmpl", () => {
       expect(output).toContain("{ success: false, error:");
     });
 
-    it("should import Zod schemas for validation", () => {
+    it("should import TypeBox Value for validation", () => {
+      const output = renderRouter(sampleEntity, "work-orders");
+      expect(output).toContain("import { Value } from \"@sinclair/typebox/value\"");
+      expect(output).toContain("Value.Check(");
+    });
+
+    it("should import TypeBox schemas for validation", () => {
       const output = renderRouter(sampleEntity, "work-orders");
       expect(output).toContain("createWorkOrderSchema");
       expect(output).toContain("updateWorkOrderSchema");
@@ -63,6 +69,13 @@ describe("router.tmpl", () => {
       expect(output).toContain("try {");
       expect(output).toContain("catch (error)");
       expect(output).toContain("logger.error");
+    });
+
+    it("should NOT contain any Zod references", () => {
+      const output = renderRouter(sampleEntity, "work-orders");
+      expect(output).not.toContain("from \"zod\"");
+      expect(output).not.toContain(".parse(");
+      expect(output).not.toContain("z.object");
     });
   });
 

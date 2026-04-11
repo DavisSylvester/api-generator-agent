@@ -5,7 +5,7 @@ You generate production-quality code following strict architectural patterns.
 - Runtime: BunJS (latest)
 - Framework: Elysia
 - Language: TypeScript strict mode, .mts file extensions
-- Validation: Zod — for env config schemas AND request validation schemas
+- Validation: TypeBox (\`@sinclair/typebox\`) — for env config schemas AND request validation schemas. Elysia's \`t\` import IS TypeBox. No extra dependency needed for route-level validation.
 - IDs: ulid (use the \`ulid\` npm package — \`import { ulid } from 'ulid'\`)
 - Logging: Winston (structured, no console.log)
 - Testing: bun:test
@@ -18,25 +18,31 @@ You generate production-quality code following strict architectural patterns.
 - Routes: always \`/v1/\` prefix — NEVER \`/api/v1/\` or \`/api/\`
 
 ## Environment variables
-Bun automatically loads \`.env\` files. Generate a Zod-validated env config singleton at \`src/env.mts\`:
+Bun automatically loads \`.env\` files. Generate a TypeBox-validated env config singleton at \`src/env.mts\`:
 \`\`\`typescript
-import { z } from 'zod'
+import { Type, Static } from '@sinclair/typebox'
+import { Value } from '@sinclair/typebox/value'
 
-const envSchema = z.object({
-  PORT: z.coerce.number().int().min(1).max(65535).default(3000),
-  MONGODB_URI: z.string().url().default('mongodb://localhost:27017/my-app'),
-  NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
-  JWT_SECRET: z.string().min(32).default('dev-secret-key-that-is-at-least-32-chars'),
+const envSchema = Type.Object({
+  PORT: Type.Optional(Type.String({ default: '3000' })),
+  MONGODB_URI: Type.Optional(Type.String({ default: 'mongodb://localhost:27017/my-app' })),
+  NODE_ENV: Type.Optional(Type.Union([
+    Type.Literal('development'),
+    Type.Literal('test'),
+    Type.Literal('production'),
+  ], { default: 'development' })),
+  JWT_SECRET: Type.Optional(Type.String({ minLength: 32, default: 'dev-secret-key-that-is-at-least-32-chars' })),
 })
 
-export type EnvConfig = z.infer<typeof envSchema>
+export type EnvConfig = Static<typeof envSchema>
 
 export function loadEnv(): EnvConfig {
-  const result = envSchema.safeParse(Bun.env)
-  if (!result.success) {
-    throw new Error(\`Environment validation failed:\\n\${result.error.issues.map((i) => \`  \${i.path.join('.')}: \${i.message}\`).join('\\n')}\`)
+  const raw = Value.Default(envSchema, { ...Bun.env })
+  if (!Value.Check(envSchema, raw)) {
+    const errors = [...Value.Errors(envSchema, raw)]
+    throw new Error(\`Environment validation failed:\\n\${errors.map((e) => \`  \${e.path}: \${e.message}\`).join('\\n')}\`)
   }
-  return result.data
+  return raw as EnvConfig
 }
 
 export const env = loadEnv()
@@ -331,7 +337,7 @@ features/
       i-user.mts          # Interface: IUser
       index.mts           # Barrel
     validation/
-      user.validation.mts # Zod schemas + z.infer<> types
+      user.validation.mts # TypeBox schemas + Static<typeof> types
       index.mts
     repository/
       user-repository.mts # extends BaseRepository
@@ -346,36 +352,67 @@ features/
     helpers/              # Optional domain helpers
 \`\`\`
 
-## Zod Validation (request schemas)
-Use Zod for request/response validation schemas:
+## TypeBox Validation (request schemas)
+Use TypeBox for request/response validation schemas:
 \`\`\`typescript
 // features/users/validation/user.validation.mts
-import { z } from 'zod'
+import { Type, Static } from '@sinclair/typebox'
 
-export const CreateUserSchema = z.object({
-  name: z.string().min(1).max(200),
-  email: z.string().email(),
-  password: z.string().min(8),
+export const CreateUserSchema = Type.Object({
+  name: Type.String({ minLength: 1, maxLength: 200 }),
+  email: Type.String({ pattern: '^[\\\\w.-]+@[\\\\w.-]+\\\\.[a-zA-Z]{2,}$' }),
+  password: Type.String({ minLength: 8 }),
 })
 
-export type CreateUserInput = z.infer<typeof CreateUserSchema>
+export type CreateUserInput = Static<typeof CreateUserSchema>
 
-export const UpdateUserSchema = CreateUserSchema.partial()
-export type UpdateUserInput = z.infer<typeof UpdateUserSchema>
-
-export const UserResponseSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  email: z.string(),
-  createdAt: z.string(),
-  updatedAt: z.string(),
+export const UpdateUserSchema = Type.Object({
+  name: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
+  email: Type.Optional(Type.String({ pattern: '^[\\\\w.-]+@[\\\\w.-]+\\\\.[a-zA-Z]{2,}$' })),
+  password: Type.Optional(Type.String({ minLength: 8 })),
 })
 
-export type UserResponse = z.infer<typeof UserResponseSchema>
+export type UpdateUserInput = Static<typeof UpdateUserSchema>
+
+export const UserResponseSchema = Type.Object({
+  id: Type.String(),
+  name: Type.String(),
+  email: Type.String(),
+  createdAt: Type.String(),
+  updatedAt: Type.String(),
+})
+
+export type UserResponse = Static<typeof UserResponseSchema>
 \`\`\`
 - Define schemas in \`features/{domain}/validation/\`
-- Use \`z.infer<typeof Schema>\` to derive types — save in same file or \`features/{domain}/interfaces/\`
-- Validate request bodies with Zod \`.parse()\` or \`.safeParse()\` in service layer
+- Use \`Static<typeof Schema>\` to derive types from schemas — save in same file or \`features/{domain}/interfaces/\`
+- Validate request bodies with \`Value.Check(schema, data)\` in service layer or router
+- For runtime validation: \`import { Value } from '@sinclair/typebox/value'\`
+- Use \`Value.Default(schema, data)\` to apply defaults before checking
+
+## TypeBox Optional & Default Patterns (CRITICAL)
+TypeBox handles optional fields and defaults differently from Zod:
+
+\`\`\`typescript
+import { Type, Static } from '@sinclair/typebox'
+
+export const CreateTodoInput = Type.Object({
+  title: Type.String({ minLength: 1, maxLength: 200 }),
+  description: Type.Optional(Type.String({ maxLength: 2000 })),
+  priority: Type.Union([
+    Type.Literal('low'),
+    Type.Literal('medium'),
+    Type.Literal('high'),
+  ], { default: 'medium' }),
+  completed: Type.Optional(Type.Boolean({ default: false })),
+})
+\`\`\`
+
+Key rules:
+- \`Type.Optional(Type.String(...))\` — wraps the inner type. Do NOT use \`{ optional: true }\`.
+- \`{ default: 'medium' }\` on \`Type.Union(...)\` — sets default via the options object.
+- \`Value.Check()\` does NOT apply defaults. Use \`Value.Default(schema, data)\` first.
+- NEVER use \`import { z } from 'zod'\` — always use TypeBox (\`@sinclair/typebox\`).
 
 ## Standardized Response Format
 ALL responses MUST follow this exact shape:
@@ -489,7 +526,7 @@ When your task has dependencies (shown in "Available Code from Dependencies"), y
   \`\`\`
 - No \`any\` — use explicit types or \`unknown\`
 - All functions have explicit return types
-- Use Zod \`z.infer<typeof Schema>\` to derive types from schemas
+- Use TypeBox \`Static<typeof Schema>\` to derive types from schemas
 
 ## Code Format
 - Double quotes for strings
@@ -546,7 +583,10 @@ They do NOT generate \`src/index.mts\`.
 Example:
 \`\`\`src/api/routes/users-router.mts
 import { Elysia } from 'elysia'
+import { Value } from '@sinclair/typebox/value'
 import { getContainer } from '../../ioc/get-container.mts'
+import { CreateUserSchema } from '../../features/users/validation/user.validation.mts'
+import { CreateUserInput } from '../../features/users/validation/user.validation.mts'
 
 export function createUsersRouter(): Elysia {
   return new Elysia({ prefix: '/v1/users' })
@@ -556,6 +596,18 @@ export function createUsersRouter(): Elysia {
       if (!result.ok) { set.status = 500; return { success: false, error: result.error.message } }
       return { success: true, data: result.value, count: result.value.length }
     }, { detail: { tags: ['Users'], summary: 'List all users' } })
+    .post('/', async ({ body, set }) => {
+      if (!Value.Check(CreateUserSchema, body)) {
+        const errors = [...Value.Errors(CreateUserSchema, body)]
+        set.status = 400
+        return { success: false, error: errors.map(e => e.message).join(', ') }
+      }
+      const container = await getContainer()
+      const result = await container.services.userService.create(body as CreateUserInput)
+      if (!result.ok) { set.status = 500; return { success: false, error: result.error.message } }
+      set.status = 201
+      return { success: true, data: result.value }
+    }, { detail: { tags: ['Users'], summary: 'Create a user' } })
 }
 \`\`\`
 

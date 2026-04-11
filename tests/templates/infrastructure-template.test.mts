@@ -87,12 +87,20 @@ describe("infrastructure templates", () => {
   });
 
   describe("renderEnvConfig", () => {
-    it("should render Zod env validation", () => {
+    it("should render TypeBox env validation", () => {
       const output = renderEnvConfig("my-project");
-      expect(output).toContain('import { z } from "zod"');
+      expect(output).toContain("import { Type, Static } from \"@sinclair/typebox\"");
+      expect(output).toContain("import { Value } from \"@sinclair/typebox/value\"");
       expect(output).toContain("envSchema");
       expect(output).toContain("loadEnv");
       expect(output).toContain("Bun.env");
+    });
+
+    it("should use Value.Check for validation", () => {
+      const output = renderEnvConfig("my-project");
+      expect(output).toContain("Value.Check(envSchema,");
+      expect(output).toContain("Value.Default(envSchema,");
+      expect(output).toContain("Value.Errors(envSchema,");
     });
 
     it("should include PORT, MONGODB_URI, NODE_ENV, JWT_SECRET", () => {
@@ -101,6 +109,14 @@ describe("infrastructure templates", () => {
       expect(output).toContain("MONGODB_URI");
       expect(output).toContain("NODE_ENV");
       expect(output).toContain("JWT_SECRET");
+    });
+
+    it("should NOT contain any Zod references", () => {
+      const output = renderEnvConfig("my-project");
+      expect(output).not.toContain("from \"zod\"");
+      expect(output).not.toContain("z.object");
+      expect(output).not.toContain("z.coerce");
+      expect(output).not.toContain("safeParse");
     });
   });
 
@@ -144,16 +160,22 @@ describe("infrastructure templates", () => {
   });
 
   describe("renderPackageJson", () => {
-    it("should render scoped package.json", () => {
+    it("should render scoped package.json with TypeBox instead of Zod", () => {
       const output = renderPackageJson("my-project");
       const parsed = JSON.parse(output);
       expect(parsed.name).toBe("@my-project/api");
       expect(parsed.type).toBe("module");
       expect(parsed.dependencies.elysia).toBeDefined();
-      expect(parsed.dependencies.zod).toBeDefined();
+      expect(parsed.dependencies["@sinclair/typebox"]).toBeDefined();
       expect(parsed.dependencies.mongodb).toBeDefined();
       expect(parsed.dependencies.ulid).toBeDefined();
       expect(parsed.dependencies.winston).toBeDefined();
+    });
+
+    it("should NOT include zod as a dependency", () => {
+      const output = renderPackageJson("my-project");
+      const parsed = JSON.parse(output);
+      expect(parsed.dependencies.zod).toBeUndefined();
     });
   });
 
