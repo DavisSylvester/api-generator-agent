@@ -16,7 +16,10 @@ import { executeGraph } from '../graph/parallel-executor.mts';
 import { runFixLoop } from './fix-loop.mts';
 import { runFallbackFixLoop } from './fallback-fix-loop.mts';
 import type { FallbackTier } from '../config/fallback-tiers.mts';
-import type { OllamaFactory } from '../llm/ollama-factory.mts';
+import type { ILlmFactory } from '../interfaces/i-llm-factory.mjs';
+import type { CostTracker } from '../llm/cost-tracker.mts';
+import { generateReport } from '../io/report-generator.mts';
+import type { GeneratedFileEntry } from '../io/report-generator.mts';
 import type { PlanningAgent } from '../agents/planning-agent.mts';
 import type { CodegenAgent } from '../agents/codegen-agent.mts';
 import type { EslintAgent } from '../agents/eslint-agent.mts';
@@ -44,7 +47,8 @@ export interface PipelineDeps {
   readonly documentationAgent: DocumentationAgent;
   readonly logger: Logger;
   readonly fallbackTiers?: readonly FallbackTier[];
-  readonly localFactory?: OllamaFactory;
+  readonly primaryFactory?: ILlmFactory;
+  readonly costTracker?: CostTracker;
 }
 
 export async function runPipeline(
@@ -186,7 +190,9 @@ export async function runPipeline(
         qaAgent: deps.qaAgent,
         workspace,
         logger,
-        dummyFactory: deps.localFactory,
+        dummyFactory: deps.primaryFactory,
+        costTracker: deps.costTracker,
+        taskCostLimit: config.taskCostLimit,
       };
       const fixConfig = { maxIterations: config.maxFixIterations, integrationPort: taskPort };
 
@@ -315,6 +321,53 @@ export async function runPipeline(
   const durationMs = Math.round(performance.now() - startMs);
 
   logger.info(`Pipeline complete in ${durationMs}ms`);
+
+  // Phase 4: Generate run report
+  logger.info(`Phase 4: Generating run report`);
+
+  const generatedFiles: GeneratedFileEntry[] = [];
+  for (const task of taskGraph.tasks) {
+    const state = taskStates.get(task.id);
+    if (state?.status === 'completed') {
+      const codeDir = workspace.taskCodeDir(task.id);
+      const codeResult = await readAllCodeFiles(codeDir);
+      if (codeResult.ok) {
+        for (const [fileName] of codeResult.value) {
+          generatedFiles.push({ taskId: task.id, filePath: fileName });
+        }
+      }
+    }
+  }
+
+  // Check if assembled index was created
+  let assembledIndexPath: string | undefined;
+  try {
+    const assembledPath = `${workspace.docsDir()}/assembled-index.mts`;
+    await access(assembledPath);
+    assembledIndexPath = assembledPath;
+  } catch {
+    // No assembled index
+  }
+
+  const report = generateReport({
+    runId,
+    durationMs,
+    prdLength: prdText.length,
+    llmProvider: config.llmProvider,
+    llmProviderHost: config.llmProviderHost,
+    maxFixIterations: config.maxFixIterations,
+    maxConcurrency: config.maxConcurrency,
+    taskGraph,
+    taskStates: allStatesArr,
+    integrationResults,
+    documentationGenerated,
+    costSummary: deps.costTracker?.getSummary(),
+    generatedFiles,
+    assembledIndexPath,
+  });
+
+  await writeFile(workspace.reportPath(), report, 'utf-8');
+  logger.info(`Run report written to ${workspace.reportPath()}`);
 
   // Write final pipeline result
   await writeJson(`${workspace.root}/pipeline-result.json`, {

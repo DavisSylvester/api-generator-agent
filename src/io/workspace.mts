@@ -113,4 +113,8 @@ export class Workspace {
   public taskQaKnowledgePath(taskId: string): string {
     return join(this.taskDir(taskId), `qa-knowledge.md`);
   }
+
+  public reportPath(): string {
+    return join(this.root, `report.md`);
+  }
 }

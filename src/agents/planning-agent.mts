@@ -8,9 +8,9 @@ import type { TaskGraph, Task } from '../types/task.mts';
 import type { Result } from '../types/result.mts';
 import { ok, err } from '../types/result.mts';
 import type { ModelChainConfig } from '../config/models.mts';
-import type { OllamaFactory } from '../llm/ollama-factory.mts';
+import type { ILlmFactory } from '../interfaces/i-llm-factory.mjs';
 import { PLANNING_SYSTEM_PROMPT, createPlanningUserPrompt } from '../prompts/planning.mts';
-import { streamInvoke } from '../llm/stream-invoke.mts';
+import { streamInvokeWithUsage } from '../llm/stream-invoke.mts';
 
 const taskSchema = z.object({
   id: z.string(),
@@ -27,7 +27,7 @@ const planResponseSchema = z.object({
 
 export class PlanningAgent extends BaseAgent<string, TaskGraph> {
 
-  constructor(modelChain: ModelChainConfig, llmFactory: OllamaFactory, logger: Logger, timeoutMs?: number) {
+  constructor(modelChain: ModelChainConfig, llmFactory: ILlmFactory, logger: Logger, timeoutMs?: number) {
     super('planning', modelChain, llmFactory, logger, timeoutMs);
   }
 
@@ -44,7 +44,9 @@ export class PlanningAgent extends BaseAgent<string, TaskGraph> {
     ];
 
     this.logger.info('[planning] Sending PRD to LLM for task decomposition (streaming)');
-    const content = await streamInvoke(chatModel, messages, traceConfig);
+    const streamResult = await streamInvokeWithUsage(chatModel, messages, traceConfig);
+    const content = streamResult.content;
+    this._lastTokenUsage = { inputTokens: streamResult.inputTokens, outputTokens: streamResult.outputTokens };
 
     this.logger.debug(`[planning] LLM response received (${content.length} chars)`);
 

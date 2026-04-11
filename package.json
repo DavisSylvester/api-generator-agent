@@ -1,8 +1,20 @@
 {
   "name": "api-generator-agent",
-  "module": "index.ts",
+  "version": "0.1.0",
+  "description": "Multi-agent pipeline that generates production-ready Elysia APIs from PRDs",
+  "module": "src/index.mts",
   "type": "module",
-  "private": true,
+  "bin": {
+    "api-generator-agent": "src/index.mts"
+  },
+  "keywords": ["ai", "code-generation", "elysia", "bun", "api", "agent", "llm"],
+  "license": "ISC",
+  "files": [
+    "src",
+    "docs",
+    "examples",
+    "README.md"
+  ],
   "devDependencies": {
     "@types/bun": "latest",
     "playwright": "^1.59.1"
@@ -21,6 +33,7 @@
     "langchain": "^1.3.0",
     "langsmith": "^0.5.16",
     "ollama": "^0.6.3",
+    "picocolors": "^1.1.1",
     "winston": "^3.19.0",
     "zod": "^4.3.6",
     "zod-to-json-schema": "^3.25.2"

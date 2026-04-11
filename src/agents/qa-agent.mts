@@ -7,7 +7,7 @@ import type { AgentInput } from '../types/agent-context.mts';
 import type { Result } from '../types/result.mts';
 import { ok, err } from '../types/result.mts';
 import type { ModelChainConfig } from '../config/models.mts';
-import type { OllamaFactory } from '../llm/ollama-factory.mts';
+import type { ILlmFactory } from '../interfaces/i-llm-factory.mjs';
 import { appendKnowledge, analyzeTestErrors } from './qa-knowledge.mts';
 import type { CodeFile } from './codegen-agent.mts';
 
@@ -43,7 +43,7 @@ export interface QaResult {
 
 export class QaAgent extends BaseAgent<QaInput, QaResult> {
 
-  constructor(modelChain: ModelChainConfig, llmFactory: OllamaFactory, logger: Logger, timeoutMs?: number) {
+  constructor(modelChain: ModelChainConfig, llmFactory: ILlmFactory, logger: Logger, timeoutMs?: number) {
     super(`qa`, modelChain, llmFactory, logger, timeoutMs, false);
   }
 

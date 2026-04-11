@@ -6,12 +6,12 @@ import type { AgentInput } from '../types/agent-context.mts';
 import type { Result } from '../types/result.mts';
 import { ok, err } from '../types/result.mts';
 import type { ModelChainConfig } from '../config/models.mts';
-import type { OllamaFactory } from '../llm/ollama-factory.mts';
+import type { ILlmFactory } from '../interfaces/i-llm-factory.mjs';
 import {
   DOCUMENTATION_SYSTEM_PROMPT,
   createDocumentationUserPrompt,
 } from '../prompts/documentation.mts';
-import { streamInvoke } from '../llm/stream-invoke.mts';
+import { streamInvokeWithUsage } from '../llm/stream-invoke.mts';
 
 export interface HoppscotchCollection {
   readonly v: number;
@@ -22,7 +22,7 @@ export interface HoppscotchCollection {
 
 export class DocumentationAgent extends BaseAgent<string, HoppscotchCollection> {
 
-  constructor(modelChain: ModelChainConfig, llmFactory: OllamaFactory, logger: Logger, timeoutMs?: number) {
+  constructor(modelChain: ModelChainConfig, llmFactory: ILlmFactory, logger: Logger, timeoutMs?: number) {
     super('documentation', modelChain, llmFactory, logger, timeoutMs);
   }
 
@@ -39,7 +39,9 @@ export class DocumentationAgent extends BaseAgent<string, HoppscotchCollection> 
     ];
 
     this.logger.info('[docs] Sending code to LLM for documentation generation (streaming)');
-    const content = await streamInvoke(chatModel, messages, traceConfig);
+    const streamResult = await streamInvokeWithUsage(chatModel, messages, traceConfig);
+    const content = streamResult.content;
+    this._lastTokenUsage = { inputTokens: streamResult.inputTokens, outputTokens: streamResult.outputTokens };
 
     this.logger.debug(`[docs] LLM response received (${content.length} chars)`);
 

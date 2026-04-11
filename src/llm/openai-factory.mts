@@ -1,11 +1,12 @@
 import { ChatOpenAI } from '@langchain/openai';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
+import type { ILlmFactory } from '../interfaces/i-llm-factory.mjs';
 
 export interface OpenAIFactoryConfig {
   readonly apiKey: string;
 }
 
-export class OpenAIFactory {
+export class OpenAIFactory implements ILlmFactory {
 
   private readonly apiKey: string;
 
@@ -20,5 +21,9 @@ export class OpenAIFactory {
       temperature,
       maxTokens: 16384,
     });
+  }
+
+  public createWithThinking(model: string, temperature: number): BaseChatModel {
+    return this.create(model, temperature);
   }
 }

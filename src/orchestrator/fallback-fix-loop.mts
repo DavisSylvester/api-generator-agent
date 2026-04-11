@@ -4,7 +4,7 @@ import type { Task, TaskState } from '../types/task.mts';
 import type { Result } from '../types/result.mts';
 import type { AgentInput, AgentOutput } from '../types/agent-context.mts';
 import type { ModelChainConfig } from '../config/models.mts';
-import type { OllamaFactory } from '../llm/ollama-factory.mts';
+import type { ILlmFactory } from '../interfaces/i-llm-factory.mjs';
 import type { FallbackTier } from '../config/fallback-tiers.mts';
 import { CodegenAgent } from '../agents/codegen-agent.mts';
 import type { CodegenInput, CodegenOutput } from '../agents/codegen-agent.mts';
@@ -27,7 +27,7 @@ class FixedModelCodegenAgent extends CodegenAgent {
   constructor(
     fixedModel: BaseChatModel,
     fixedModelName: string,
-    llmFactory: OllamaFactory,
+    llmFactory: ILlmFactory,
     logger: Logger,
     timeoutMs?: number,
   ) {
@@ -74,9 +74,8 @@ export async function runFallbackFixLoop(
     logger.info(`[fallback] ═══ Escalating task ${task.id} to ${tier.name} (${tier.maxIterations} iterations) ═══`);
 
     const chatModel = tier.createChatModel();
-    // FixedModelCodegenAgent needs an OllamaFactory for the BaseAgent constructor,
+    // FixedModelCodegenAgent needs an ILlmFactory for the BaseAgent constructor,
     // but it won't use it since run() is overridden to use the fixed model directly.
-    // We pass a dummy factory — the localFactory from deps works fine.
     const fallbackAgent = new FixedModelCodegenAgent(
       chatModel,
       tier.model,
