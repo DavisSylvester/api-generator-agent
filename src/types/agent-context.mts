@@ -11,5 +11,7 @@ export interface AgentOutput<T> {
   readonly payload: T;
   readonly modelUsed: string;
   readonly durationMs: number;
+  readonly inputTokens: number;
+  readonly outputTokens: number;
   readonly traceId?: string;
 }

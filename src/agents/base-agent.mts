@@ -4,24 +4,30 @@ import type { AgentInput, AgentOutput } from '../types/agent-context.mts';
 import type { Result } from '../types/result.mts';
 import { ok, err } from '../types/result.mts';
 import type { AgentRole, ModelChainConfig } from '../config/models.mts';
-import type { OllamaFactory } from '../llm/ollama-factory.mts';
+import type { ILlmFactory } from '../interfaces/i-llm-factory.mjs';
 import { createTraceConfig } from '../llm/tracing.mts';
 import { ThinkingSpinner } from '../llm/thinking-spinner.mts';
 import { withTimeout, LlmTimeoutError } from '../llm/with-timeout.mts';
+
+export interface TokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+}
 
 export abstract class BaseAgent<TIn, TOut> {
 
   protected readonly role: AgentRole;
   protected readonly modelChain: ModelChainConfig;
-  protected readonly llmFactory: OllamaFactory;
+  protected readonly llmFactory: ILlmFactory;
   protected readonly logger: Logger;
   protected readonly timeoutMs: number;
   protected readonly useThinking: boolean;
+  protected _lastTokenUsage: TokenUsage = { inputTokens: 0, outputTokens: 0 };
 
   constructor(
     role: AgentRole,
     modelChain: ModelChainConfig,
-    llmFactory: OllamaFactory,
+    llmFactory: ILlmFactory,
     logger: Logger,
     timeoutMs: number = 1800000,
     useThinking: boolean = false,
@@ -57,6 +63,7 @@ export abstract class BaseAgent<TIn, TOut> {
 
       try {
         this.logger.info(`[${this.role}] Timeout set to ${Math.round(this.timeoutMs / 1000)}s`);
+        this._lastTokenUsage = { inputTokens: 0, outputTokens: 0 };
         const result = await withTimeout(
           this.execute(input, chatModel, traceConfig),
           model,
@@ -74,6 +81,8 @@ export abstract class BaseAgent<TIn, TOut> {
             payload: result.value,
             modelUsed: model,
             durationMs,
+            inputTokens: this._lastTokenUsage.inputTokens,
+            outputTokens: this._lastTokenUsage.outputTokens,
           });
         }
 
@@ -117,6 +126,7 @@ export abstract class BaseAgent<TIn, TOut> {
     spinner.start();
 
     try {
+      this._lastTokenUsage = { inputTokens: 0, outputTokens: 0 };
       const result = await withTimeout(
         this.execute(input, chatModel, traceConfig),
         modelName,
@@ -133,6 +143,8 @@ export abstract class BaseAgent<TIn, TOut> {
           payload: result.value,
           modelUsed: modelName,
           durationMs,
+          inputTokens: this._lastTokenUsage.inputTokens,
+          outputTokens: this._lastTokenUsage.outputTokens,
         });
       }
 

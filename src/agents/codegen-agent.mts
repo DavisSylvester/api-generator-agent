@@ -6,13 +6,13 @@ import type { AgentInput } from '../types/agent-context.mts';
 import type { Result } from '../types/result.mts';
 import { ok, err } from '../types/result.mts';
 import type { ModelChainConfig } from '../config/models.mts';
-import type { OllamaFactory } from '../llm/ollama-factory.mts';
+import type { ILlmFactory } from '../interfaces/i-llm-factory.mjs';
 import {
   CODEGEN_SYSTEM_PROMPT,
   createCodegenUserPrompt,
   createFixPrompt,
 } from '../prompts/codegen.mts';
-import { streamInvoke } from '../llm/stream-invoke.mts';
+import { streamInvokeWithUsage } from '../llm/stream-invoke.mts';
 
 export const NO_CODE_BLOCKS_ERROR = `No code blocks found in codegen response`;
 
@@ -37,7 +37,7 @@ export type CodegenOutput = readonly CodeFile[];
 
 export class CodegenAgent extends BaseAgent<CodegenInput, CodegenOutput> {
 
-  constructor(modelChain: ModelChainConfig, llmFactory: OllamaFactory, logger: Logger, timeoutMs?: number) {
+  constructor(modelChain: ModelChainConfig, llmFactory: ILlmFactory, logger: Logger, timeoutMs?: number) {
     super('codegen', modelChain, llmFactory, logger, timeoutMs);
   }
 
@@ -70,7 +70,9 @@ export class CodegenAgent extends BaseAgent<CodegenInput, CodegenOutput> {
     ];
 
     this.logger.info(`[codegen] Sending prompt to LLM (${userPrompt.length} chars) (streaming)`);
-    const content = await streamInvoke(chatModel, messages, traceConfig);
+    const streamResult = await streamInvokeWithUsage(chatModel, messages, traceConfig);
+    const content = streamResult.content;
+    this._lastTokenUsage = { inputTokens: streamResult.inputTokens, outputTokens: streamResult.outputTokens };
 
     this.logger.debug(`[codegen] LLM response received (${content.length} chars)`);
 

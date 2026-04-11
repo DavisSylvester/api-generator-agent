@@ -1,4 +1,6 @@
 import { ChatOllama } from '@langchain/ollama';
+import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
+import type { ILlmFactory } from '../interfaces/i-llm-factory.mjs';
 
 export interface OllamaFactoryConfig {
   readonly host: string;
@@ -18,7 +20,7 @@ function createLongTimeoutFetch(timeoutMs: number): (input: string | URL | Reque
   };
 }
 
-export class OllamaFactory {
+export class OllamaFactory implements ILlmFactory {
 
   private readonly host: string;
   private readonly timeoutMs: number;
@@ -32,7 +34,7 @@ export class OllamaFactory {
       : {};
   }
 
-  public create(model: string, temperature: number): ChatOllama {
+  public create(model: string, temperature: number): BaseChatModel {
     return new ChatOllama({
       baseUrl: this.host,
       model,
@@ -46,7 +48,7 @@ export class OllamaFactory {
     } as ConstructorParameters<typeof ChatOllama>[0]);
   }
 
-  public createWithThinking(model: string, temperature: number): ChatOllama {
+  public createWithThinking(model: string, temperature: number): BaseChatModel {
     return new ChatOllama({
       baseUrl: this.host,
       model,
@@ -60,7 +62,7 @@ export class OllamaFactory {
     } as ConstructorParameters<typeof ChatOllama>[0]);
   }
 
-  public createWithJsonFormat(model: string, temperature: number): ChatOllama {
+  public createWithJsonFormat(model: string, temperature: number): BaseChatModel {
     return new ChatOllama({
       baseUrl: this.host,
       model,

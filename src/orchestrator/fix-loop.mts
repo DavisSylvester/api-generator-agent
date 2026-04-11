@@ -8,7 +8,9 @@ import type { CodegenAgent, CodegenInput, CodeFile } from '../agents/codegen-age
 import type { EslintAgent } from '../agents/eslint-agent.mts';
 import type { QaAgent, QaInput } from '../agents/qa-agent.mts';
 import type { Workspace } from '../io/workspace.mts';
-import type { OllamaFactory } from '../llm/ollama-factory.mts';
+import type { ILlmFactory } from '../interfaces/i-llm-factory.mjs';
+import type { CostTracker } from '../llm/cost-tracker.mts';
+import { CostLimitExceededError } from '../types/llm-errors.mts';
 import { writeJson, writeCode, readAllCodeFiles } from '../io/file-protocol.mts';
 import { writeFile, mkdir, readFile } from 'node:fs/promises';
 import { CODEGEN_SYSTEM_PROMPT } from '../prompts/codegen-system-prompt.mts';
@@ -31,7 +33,9 @@ export interface FixLoopDeps {
   readonly qaAgent: QaAgent;
   readonly workspace: Workspace;
   readonly logger: Logger;
-  readonly dummyFactory?: OllamaFactory;
+  readonly dummyFactory?: ILlmFactory;
+  readonly costTracker?: CostTracker;
+  readonly taskCostLimit?: number;
 }
 
 export async function runFixLoop(
@@ -198,6 +202,33 @@ export async function runFixLoop(
     let allFiles = codegenResult.value.payload;
     const codegenDurationMs = Math.round(performance.now() - codegenStartMs);
     logger.info(`[fix-loop] Step 1/3: CodeGen completed in ${codegenDurationMs}ms — ${allFiles.length} files (model: ${codegenResult.value.modelUsed})`);
+
+    // Record cost and check task cost ceiling
+    if (deps.costTracker) {
+      deps.costTracker.record(
+        codegenResult.value.modelUsed,
+        codegenResult.value.inputTokens,
+        codegenResult.value.outputTokens,
+        task.id,
+      );
+      const taskCost = deps.costTracker.getTaskCost(task.id);
+      const limit = deps.taskCostLimit ?? Infinity;
+      if (taskCost > limit) {
+        const costErr = new CostLimitExceededError(taskCost, limit);
+        logger.error(`[fix-loop] ${costErr.message}`);
+        await writeJson(workspace.taskStatusPath(task.id), {
+          status: 'failed',
+          iteration,
+          lastError: costErr.message,
+        });
+        return ok({
+          taskId: task.id,
+          status: 'failed',
+          iteration,
+          lastError: costErr.message,
+        });
+      }
+    }
 
     // Separate test files from code files BEFORE truncation so tests don't get cut
     const testFiles = allFiles.filter((f) => f.path.includes(`.test.mts`) || f.path.includes(`.test.ts`));

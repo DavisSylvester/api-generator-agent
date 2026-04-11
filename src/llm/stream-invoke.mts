@@ -1,19 +1,43 @@
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
-import type { BaseMessage } from '@langchain/core/messages';
+import type { BaseMessage, AIMessageChunk } from '@langchain/core/messages';
+
+export interface StreamInvokeResult {
+  readonly content: string;
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+}
 
 export async function streamInvoke(
   chatModel: BaseChatModel,
   messages: readonly BaseMessage[],
   traceConfig: Record<string, unknown>,
 ): Promise<string> {
+  const result = await streamInvokeWithUsage(chatModel, messages, traceConfig);
+  return result.content;
+}
+
+export async function streamInvokeWithUsage(
+  chatModel: BaseChatModel,
+  messages: readonly BaseMessage[],
+  traceConfig: Record<string, unknown>,
+): Promise<StreamInvokeResult> {
   const stream = await chatModel.stream([...messages], traceConfig);
   const chunks: string[] = [];
+  let inputTokens = 0;
+  let outputTokens = 0;
 
   for await (const chunk of stream) {
     const text = typeof chunk.content === 'string'
       ? chunk.content
       : JSON.stringify(chunk.content);
     chunks.push(text);
+
+    // Extract token usage from chunk metadata if available
+    const usage = (chunk as AIMessageChunk).usage_metadata;
+    if (usage) {
+      inputTokens = usage.input_tokens ?? inputTokens;
+      outputTokens = usage.output_tokens ?? outputTokens;
+    }
   }
 
   const raw = chunks.join('');
@@ -35,5 +59,5 @@ export async function streamInvoke(
     }
   }
 
-  return cleaned;
+  return { content: cleaned, inputTokens, outputTokens };
 }
