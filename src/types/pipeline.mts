@@ -17,4 +17,6 @@ export interface PipelineResult {
   readonly taskStates: readonly TaskState[];
   readonly documentationGenerated: boolean;
   readonly durationMs: number;
+  readonly featuresJsonPath?: string;
+  readonly sessionHandoffPath?: string;
 }

@@ -25,6 +25,8 @@ import type { CodegenAgent } from '../agents/codegen-agent.mts';
 import type { EslintAgent } from '../agents/eslint-agent.mts';
 import { QaAgent } from '../agents/qa-agent.mts';
 import type { DocumentationAgent } from '../agents/documentation-agent.mts';
+import { FeaturesStore } from '../state/features-store.mts';
+import { SessionStore } from '../state/session-store.mts';
 
 const cachedTaskGraphSchema = z.object({
   runId: z.string(),
@@ -177,6 +179,12 @@ export async function runPipeline(
     return err(planWriteResult.error);
   }
 
+  // Initialize features.json state store
+  const featuresStore = new FeaturesStore(config.workspaceDir, runId);
+  const featuresJsonPath = `${config.workspaceDir}/${runId}/features.json`;
+  await featuresStore.init(runId, taskGraph.tasks.map((t) => ({ id: t.id, name: t.name })));
+  logger.info(`Features state initialized: ${featuresJsonPath}`);
+
   // Phase 2: Execute tasks
   logger.info(`Phase 2: Executing task graph`);
   const taskStates = await executeGraph(
@@ -196,14 +204,29 @@ export async function runPipeline(
       };
       const fixConfig = { maxIterations: config.maxFixIterations, integrationPort: taskPort };
 
+      await featuresStore.markInProgress(task.id);
+
+      let result;
       // Use fallback system if tiers are configured, otherwise plain fix loop
       if (deps.fallbackTiers && deps.fallbackTiers.length > 0) {
-        return runFallbackFixLoop(task, runId, fixDeps, {
+        result = await runFallbackFixLoop(task, runId, fixDeps, {
           primaryConfig: fixConfig,
           fallbackTiers: deps.fallbackTiers,
         });
+      } else {
+        result = await runFixLoop(task, runId, fixDeps, fixConfig);
       }
-      return runFixLoop(task, runId, fixDeps, fixConfig);
+
+      if (result.ok) {
+        const state = result.value;
+        if (state.status === 'completed') {
+          await featuresStore.markComplete(task.id, state.iteration);
+        } else if (state.status === 'failed') {
+          await featuresStore.markFailed(task.id, state.iteration, state.lastError ?? 'Unknown error');
+        }
+      }
+
+      return result;
     },
     { maxConcurrency: config.maxConcurrency },
     logger,
@@ -322,6 +345,18 @@ export async function runPipeline(
 
   logger.info(`Pipeline complete in ${durationMs}ms`);
 
+  // Generate session handoff document
+  const sessionStore = new SessionStore();
+  let sessionHandoffPath: string | undefined;
+  try {
+    await sessionStore.generateHandoff(runId, allStatesArr, config.workspaceDir);
+    sessionHandoffPath = `${config.workspaceDir}/${runId}/SESSION-HANDOFF.md`;
+    logger.info(`Session handoff written: ${sessionHandoffPath}`);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    logger.warn(`[pipeline] Session handoff generation failed: ${msg}`);
+  }
+
   // Phase 4: Generate run report
   logger.info(`Phase 4: Generating run report`);
 
@@ -374,6 +409,8 @@ export async function runPipeline(
     runId,
     durationMs,
     documentationGenerated,
+    featuresJsonPath,
+    sessionHandoffPath,
     completedAt: new Date().toISOString(),
   });
 
@@ -382,6 +419,8 @@ export async function runPipeline(
     taskStates: allStatesArr,
     documentationGenerated,
     durationMs,
+    featuresJsonPath,
+    sessionHandoffPath,
   });
 }
 
