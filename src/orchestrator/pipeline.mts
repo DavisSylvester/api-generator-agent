@@ -14,10 +14,13 @@ import { dirname } from 'node:path';
 import { validateGraph } from '../graph/task-graph.mts';
 import { executeGraph } from '../graph/parallel-executor.mts';
 import { runFixLoop } from './fix-loop.mts';
+import { runFallbackFixLoop } from './fallback-fix-loop.mts';
+import type { FallbackTier } from '../config/fallback-tiers.mts';
+import type { OllamaFactory } from '../llm/ollama-factory.mts';
 import type { PlanningAgent } from '../agents/planning-agent.mts';
 import type { CodegenAgent } from '../agents/codegen-agent.mts';
 import type { EslintAgent } from '../agents/eslint-agent.mts';
-import type { QaAgent } from '../agents/qa-agent.mts';
+import { QaAgent } from '../agents/qa-agent.mts';
 import type { DocumentationAgent } from '../agents/documentation-agent.mts';
 
 const cachedTaskGraphSchema = z.object({
@@ -40,6 +43,8 @@ export interface PipelineDeps {
   readonly qaAgent: QaAgent;
   readonly documentationAgent: DocumentationAgent;
   readonly logger: Logger;
+  readonly fallbackTiers?: readonly FallbackTier[];
+  readonly localFactory?: OllamaFactory;
 }
 
 export async function runPipeline(
@@ -175,13 +180,24 @@ export async function runPipeline(
     async (task) => {
       const taskIndex = taskGraph.tasks.indexOf(task);
       const taskPort = config.integrationPort + taskIndex;
-      return runFixLoop(task, runId, {
+      const fixDeps = {
         codegenAgent: deps.codegenAgent,
         eslintAgent: deps.eslintAgent,
         qaAgent: deps.qaAgent,
         workspace,
         logger,
-      }, { maxIterations: config.maxFixIterations, integrationPort: taskPort });
+        dummyFactory: deps.localFactory,
+      };
+      const fixConfig = { maxIterations: config.maxFixIterations, integrationPort: taskPort };
+
+      // Use fallback system if tiers are configured, otherwise plain fix loop
+      if (deps.fallbackTiers && deps.fallbackTiers.length > 0) {
+        return runFallbackFixLoop(task, runId, fixDeps, {
+          primaryConfig: fixConfig,
+          fallbackTiers: deps.fallbackTiers,
+        });
+      }
+      return runFixLoop(task, runId, fixDeps, fixConfig);
     },
     { maxConcurrency: config.maxConcurrency },
     logger,
@@ -286,6 +302,14 @@ export async function runPipeline(
     } else {
       logger.error(`Documentation generation failed: ${docResult.error.message}`);
     }
+  }
+
+  // Clean up MongoDB Docker container
+  try {
+    await QaAgent.stopMongoDB(logger);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    logger.warn(`[pipeline] MongoDB cleanup failed: ${msg}`);
   }
 
   const durationMs = Math.round(performance.now() - startMs);

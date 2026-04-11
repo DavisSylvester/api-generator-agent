@@ -9,6 +9,9 @@ import { CodegenAgent } from '../agents/codegen-agent.mts';
 import { EslintAgent } from '../agents/eslint-agent.mts';
 import { QaAgent } from '../agents/qa-agent.mts';
 import { DocumentationAgent } from '../agents/documentation-agent.mts';
+import { AnthropicFactory } from '../llm/anthropic-factory.mts';
+import { OpenAIFactory } from '../llm/openai-factory.mts';
+import type { FallbackTier } from '../config/fallback-tiers.mts';
 
 export interface Container {
 
@@ -21,6 +24,7 @@ export interface Container {
   readonly qaAgent: QaAgent;
   readonly documentationAgent: DocumentationAgent;
   readonly pipelineConfig: PipelineConfig;
+  readonly fallbackTiers: readonly FallbackTier[];
 }
 
 export function createContainer(env: EnvConfig): Container {
@@ -51,10 +55,11 @@ export function createContainer(env: EnvConfig): Container {
   logger.info(`Local Ollama: ${env.OLLAMA_HOST}`);
 
   // Cloud Ollama for codegen (qwen3-coder-next) — falls back to local if no API key
+  const CLOUD_TIMEOUT_MS = 600000; // 10 minutes for cloud models
   const codegenFactory = env.OLLAMA_API_KEY
-    ? new OllamaFactory({ host: `https://api.ollama.com`, apiKey: env.OLLAMA_API_KEY })
+    ? new OllamaFactory({ host: `https://api.ollama.com`, apiKey: env.OLLAMA_API_KEY, timeoutMs: CLOUD_TIMEOUT_MS })
     : localFactory;
-  logger.info(`Codegen Ollama: ${env.OLLAMA_API_KEY ? `https://api.ollama.com (cloud)` : `${env.OLLAMA_HOST} (local)`}`);
+  logger.info(`Codegen Ollama: ${env.OLLAMA_API_KEY ? `https://api.ollama.com (cloud, timeout: ${CLOUD_TIMEOUT_MS / 1000}s)` : `${env.OLLAMA_HOST} (local)`}`);
 
   const timeoutMs = env.LLM_TIMEOUT_MS;
   logger.info(`LLM timeout set to ${Math.round(timeoutMs / 1000)}s`);
@@ -89,6 +94,37 @@ export function createContainer(env: EnvConfig): Container {
     timeoutMs,
   );
 
+  // Build fallback tiers for codegen retry/escalation
+  const fallbackTiers: FallbackTier[] = [];
+
+  // Tier 2: OpenAI GPT-5.4
+  if (env.OPENAI_API_KEY) {
+    const openaiFactory = new OpenAIFactory({ apiKey: env.OPENAI_API_KEY });
+    fallbackTiers.push({
+      name: `gpt-5.4`,
+      model: `gpt-5.4`,
+      maxIterations: 16,
+      createChatModel: () => openaiFactory.create(`gpt-5.4`, 0.2),
+    });
+    logger.info(`Fallback Tier 2: gpt-5.4 (16 iterations)`);
+  }
+
+  // Tier 3: Claude Sonnet 4.6 via Anthropic API
+  if (env.ANTHROPIC_API_KEY) {
+    const anthropicFactory = new AnthropicFactory({ apiKey: env.ANTHROPIC_API_KEY });
+    fallbackTiers.push({
+      name: `claude-sonnet-4-6`,
+      model: `claude-sonnet-4-6`,
+      maxIterations: 16,
+      createChatModel: () => anthropicFactory.create(`claude-sonnet-4-6`, 0.2),
+    });
+    logger.info(`Fallback Tier 3: claude-sonnet-4-6 (16 iterations)`);
+  }
+
+  if (fallbackTiers.length === 0) {
+    logger.warn(`No fallback tiers configured — set OLLAMA_API_KEY and/or ANTHROPIC_API_KEY`);
+  }
+
   const pipelineConfig: PipelineConfig = {
     maxFixIterations: env.MAX_FIX_ITERATIONS,
     maxConcurrency: env.MAX_CONCURRENCY,
@@ -107,5 +143,6 @@ export function createContainer(env: EnvConfig): Container {
     qaAgent,
     documentationAgent,
     pipelineConfig,
+    fallbackTiers,
   };
 }

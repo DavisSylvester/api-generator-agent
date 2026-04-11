@@ -98,6 +98,54 @@ export abstract class BaseAgent<TIn, TOut> {
     ));
   }
 
+  public async runWithModel(
+    input: AgentInput<TIn>,
+    chatModel: BaseChatModel,
+    modelName: string,
+  ): Promise<Result<AgentOutput<TOut>, Error>> {
+    this.logger.info(`[${this.role}] Using explicit model: ${modelName}`);
+    const traceConfig = createTraceConfig({
+      runId: input.runId,
+      agentRole: this.role,
+      taskId: input.taskId,
+      model: modelName,
+      iteration: input.iteration,
+    });
+
+    const startMs = performance.now();
+    const spinner = new ThinkingSpinner(`${this.role}:${modelName}`);
+    spinner.start();
+
+    try {
+      const result = await withTimeout(
+        this.execute(input, chatModel, traceConfig),
+        modelName,
+        this.timeoutMs,
+      );
+
+      if (result.ok) {
+        const durationMs = Math.round(performance.now() - startMs);
+        spinner.stop(`Done — ${modelName}`);
+        this.logger.info(`[${this.role}] Success with model ${modelName} (${durationMs}ms)`);
+        return ok({
+          runId: input.runId,
+          taskId: input.taskId,
+          payload: result.value,
+          modelUsed: modelName,
+          durationMs,
+        });
+      }
+
+      const errorMsg = result.error instanceof Error ? result.error.message : String(result.error);
+      spinner.stop(`Failed — ${modelName}: ${errorMsg}`);
+      return err(result.error instanceof Error ? result.error : new Error(errorMsg));
+    } catch (e) {
+      const errorMsg = e instanceof Error ? e.message : String(e);
+      spinner.stop(`Error — ${modelName}: ${errorMsg}`);
+      return err(e instanceof Error ? e : new Error(errorMsg));
+    }
+  }
+
   protected abstract execute(
     input: AgentInput<TIn>,
     chatModel: BaseChatModel,

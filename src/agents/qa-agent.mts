@@ -47,6 +47,10 @@ export class QaAgent extends BaseAgent<QaInput, QaResult> {
     super(`qa`, modelChain, llmFactory, logger, timeoutMs, false);
   }
 
+  private static mongoUri: string | undefined;
+  private static readonly MONGO_CONTAINER_NAME = `qa-mongodb`;
+  private static readonly MONGO_PORT = 27018;
+
   protected async execute(
     input: AgentInput<QaInput>,
     _chatModel: BaseChatModel,
@@ -56,6 +60,12 @@ export class QaAgent extends BaseAgent<QaInput, QaResult> {
       taskId, taskName, codeFiles,
       testsDir, codeDir, integrationDir, knowledgePath, port,
     } = input.payload;
+
+    // Ensure MongoDB Docker container is running before tests
+    const mongoResult = await this.ensureMongoDB();
+    if (!mongoResult.ok) {
+      return err(new Error(`MongoDB setup failed: ${mongoResult.error.message}`));
+    }
 
     const testFilePath = join(testsDir, `${taskId}.test.mts`);
     const collectionPath = join(integrationDir, 'collection.json');
@@ -72,6 +82,21 @@ export class QaAgent extends BaseAgent<QaInput, QaResult> {
 
     // Install third-party dependencies so imports resolve at test time
     await this.installDependencies(codeFiles, taskDir);
+
+    // Delete any stale test files from code/tests/ — bun test picks them up and they fail
+    // because ../code/ import prefix resolves to code/code/ from inside code/tests/
+    const staleTestsDir = join(codeDir, `tests`);
+    try {
+      const { Glob } = await import(`bun`);
+      const glob = new Glob(`**/*.test.{mts,ts}`);
+      for await (const path of glob.scan({ cwd: staleTestsDir, absolute: true })) {
+        const { unlink } = await import(`node:fs/promises`);
+        await unlink(path);
+        this.logger.warn(`[qa] Deleted stale test file from code dir: ${path}`);
+      }
+    } catch {
+      // code/tests/ doesn't exist — that's fine
+    }
 
     // Verify test file exists (codegen should have generated it)
     const testExists = await fileExists(testFilePath);
@@ -144,20 +169,121 @@ export class QaAgent extends BaseAgent<QaInput, QaResult> {
     });
   }
 
+  private async ensureMongoDB(): Promise<Result<string, Error>> {
+    // If we already have a URI from a previous call, verify the container is still running
+    if (QaAgent.mongoUri) {
+      const checkProc = Bun.spawn([`docker`, `inspect`, `--format`, `{{.State.Running}}`, QaAgent.MONGO_CONTAINER_NAME], {
+        stdout: `pipe`,
+        stderr: `pipe`,
+      });
+      const checkOutput = await new Response(checkProc.stdout).text();
+      const checkExit = await checkProc.exited;
+      if (checkExit === 0 && checkOutput.trim() === `true`) {
+        this.logger.info(`[qa] MongoDB container already running at ${QaAgent.mongoUri}`);
+        return ok(QaAgent.mongoUri);
+      }
+      // Container not running — reset and re-create
+      QaAgent.mongoUri = undefined;
+    }
+
+    this.logger.info(`[qa] Starting MongoDB Docker container: ${QaAgent.MONGO_CONTAINER_NAME}`);
+
+    // Remove any existing stopped container with the same name
+    const rmProc = Bun.spawn([`docker`, `rm`, `-f`, QaAgent.MONGO_CONTAINER_NAME], {
+      stdout: `pipe`,
+      stderr: `pipe`,
+    });
+    await rmProc.exited;
+
+    // Start a fresh MongoDB container
+    const startProc = Bun.spawn([
+      `docker`, `run`, `-d`,
+      `--name`, QaAgent.MONGO_CONTAINER_NAME,
+      `-p`, `${QaAgent.MONGO_PORT}:27017`,
+      `mongo:latest`,
+    ], {
+      stdout: `pipe`,
+      stderr: `pipe`,
+    });
+
+    const startStderr = await new Response(startProc.stderr).text();
+    const startExit = await startProc.exited;
+
+    if (startExit !== 0) {
+      return err(new Error(`Failed to start MongoDB container: ${startStderr.trim()}`));
+    }
+
+    // Wait for MongoDB to be ready (up to 30 seconds)
+    const uri = `mongodb://localhost:${QaAgent.MONGO_PORT}/test-db`;
+    const ready = await this.waitForMongoDB(uri, 30000);
+    if (!ready) {
+      return err(new Error(`MongoDB container started but not ready within 30s`));
+    }
+
+    QaAgent.mongoUri = uri;
+    this.logger.info(`[qa] MongoDB ready at ${uri}`);
+    return ok(uri);
+  }
+
+  private async waitForMongoDB(uri: string, timeoutMs: number): Promise<boolean> {
+    const startMs = performance.now();
+    const interval = 1000;
+
+    while (performance.now() - startMs < timeoutMs) {
+      try {
+        // Use mongosh/docker exec to check readiness
+        const checkProc = Bun.spawn([
+          `docker`, `exec`, QaAgent.MONGO_CONTAINER_NAME,
+          `mongosh`, `--eval`, `db.runCommand({ ping: 1 })`, `--quiet`,
+        ], {
+          stdout: `pipe`,
+          stderr: `pipe`,
+        });
+        const checkExit = await checkProc.exited;
+        if (checkExit === 0) {
+          return true;
+        }
+      } catch {
+        // Not ready yet
+      }
+      await new Promise((resolve) => setTimeout(resolve, interval));
+    }
+    return false;
+  }
+
+  public static async stopMongoDB(logger: Logger): Promise<void> {
+    logger.info(`[qa] Stopping MongoDB container: ${QaAgent.MONGO_CONTAINER_NAME}`);
+    const proc = Bun.spawn([`docker`, `rm`, `-f`, QaAgent.MONGO_CONTAINER_NAME], {
+      stdout: `pipe`,
+      stderr: `pipe`,
+    });
+    await proc.exited;
+    QaAgent.mongoUri = undefined;
+    logger.info(`[qa] MongoDB container stopped`);
+  }
+
   private async installDependencies(codeFiles: readonly CodeFile[], taskDir: string): Promise<void> {
     const thirdParty = new Set<string>();
 
+    // Scan task's own code files
     for (const file of codeFiles) {
-      const importMatches = file.content.matchAll(/(?:import|from)\s+['"]([^./][^'"]*)['"]/g);
-      for (const match of importMatches) {
-        const specifier = match[1]!;
-        const pkgName = specifier.startsWith('@')
-          ? specifier.split('/').slice(0, 2).join('/')
-          : specifier.split('/')[0]!;
+      this.scanImports(file.content, thirdParty);
+    }
 
-        if (pkgName.startsWith('bun:') || pkgName.startsWith('node:')) continue;
-        thirdParty.add(pkgName);
-      }
+    // Also scan ALL files in the code directory (includes dependency code copied from shared output)
+    const codeDir = join(taskDir, `code`);
+    try {
+      await this.scanDirForImports(codeDir, thirdParty);
+    } catch {
+      // code dir might not exist yet for first iteration
+    }
+
+    // Also scan test files for imports
+    const testsDir = join(taskDir, `tests`);
+    try {
+      await this.scanDirForImports(testsDir, thirdParty);
+    } catch {
+      // tests dir might not exist
     }
 
     // Block forbidden DI frameworks and polyfills that crash at runtime
@@ -171,6 +297,7 @@ export class QaAgent extends BaseAgent<QaInput, QaResult> {
       `typed-inject`,
       `better-sqlite3`,
       `sqlite3`,
+      `mongoose`,
       `bcrypt`,
       `argon2`,
       `node-gyp`,
@@ -188,8 +315,12 @@ export class QaAgent extends BaseAgent<QaInput, QaResult> {
       return;
     }
 
-    // Always include @types/bun for type resolution in tests
+    // Always include baseline packages needed by nearly all tasks
     thirdParty.add(`@types/bun`);
+    thirdParty.add(`elysia`);
+    thirdParty.add(`jose`);
+    thirdParty.add(`@sinclair/typebox`);
+    thirdParty.add(`mongodb`);
 
     const pkgJsonPath = join(taskDir, `package.json`);
     let existingDeps = new Set<string>();
@@ -273,6 +404,31 @@ export class QaAgent extends BaseAgent<QaInput, QaResult> {
     }
   }
 
+  private scanImports(content: string, thirdParty: Set<string>): void {
+    const importMatches = content.matchAll(/(?:import|from)\s+['"]([^./][^'"]*)['"]/g);
+    for (const match of importMatches) {
+      const specifier = match[1]!;
+      const pkgName = specifier.startsWith(`@`)
+        ? specifier.split(`/`).slice(0, 2).join(`/`)
+        : specifier.split(`/`)[0]!;
+      if (pkgName.startsWith(`bun:`) || pkgName.startsWith(`node:`)) continue;
+      thirdParty.add(pkgName);
+    }
+  }
+
+  private async scanDirForImports(dir: string, thirdParty: Set<string>): Promise<void> {
+    const { Glob } = await import(`bun`);
+    const glob = new Glob(`**/*.{mts,ts}`);
+    for await (const path of glob.scan({ cwd: dir, absolute: true })) {
+      try {
+        const content = await readFile(path, `utf-8`);
+        this.scanImports(content, thirdParty);
+      } catch {
+        // skip unreadable files
+      }
+    }
+  }
+
   private async runBunTests(testFilePath: string, cwd: string): Promise<TestPhaseResult> {
     try {
       this.logger.info(`[qa] Running: bun test ${testFilePath} (cwd: ${cwd})`);
@@ -280,7 +436,10 @@ export class QaAgent extends BaseAgent<QaInput, QaResult> {
         cwd,
         stdout: 'pipe',
         stderr: 'pipe',
-        env: { ...Bun.env },
+        env: {
+          ...Bun.env,
+          MONGODB_URI: QaAgent.mongoUri ?? `mongodb://localhost:${QaAgent.MONGO_PORT}/test-db`,
+        },
       });
 
       const [stdout, stderr] = await Promise.all([

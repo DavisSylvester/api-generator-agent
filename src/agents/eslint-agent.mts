@@ -33,6 +33,8 @@ export class EslintAgent {
       ``,
     ].join(`\n`);
 
+    // Ensure workDir exists before writing config
+    await mkdir(workDir, { recursive: true });
     await writeFile(join(workDir, `eslint.config.mjs`), eslintConfigContent, `utf-8`);
 
     const linted: CodeFile[] = [];

@@ -57,6 +57,8 @@ async function main(): Promise<void> {
     qaAgent: container.qaAgent,
     documentationAgent: container.documentationAgent,
     logger,
+    fallbackTiers: container.fallbackTiers,
+    localFactory: container.localFactory,
   });
 
   if (!result.ok) {

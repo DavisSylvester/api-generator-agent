@@ -3,10 +3,12 @@ import type { Task, TaskState } from '../types/task.mts';
 import type { AgentInput } from '../types/agent-context.mts';
 import type { Result } from '../types/result.mts';
 import { ok, err } from '../types/result.mts';
+import { NO_CODE_BLOCKS_ERROR } from '../agents/codegen-agent.mts';
 import type { CodegenAgent, CodegenInput, CodeFile } from '../agents/codegen-agent.mts';
 import type { EslintAgent } from '../agents/eslint-agent.mts';
 import type { QaAgent, QaInput } from '../agents/qa-agent.mts';
 import type { Workspace } from '../io/workspace.mts';
+import type { OllamaFactory } from '../llm/ollama-factory.mts';
 import { writeJson, writeCode, readAllCodeFiles } from '../io/file-protocol.mts';
 import { writeFile, mkdir, readFile } from 'node:fs/promises';
 import { CODEGEN_SYSTEM_PROMPT } from '../prompts/codegen-system-prompt.mts';
@@ -15,9 +17,12 @@ import { createFixPrompt } from '../prompts/create-fix-prompt.mts';
 import { validateImports, validateNamedExports } from '../validators/import-validator.mts';
 import { extractExports } from '../validators/extract-exports.mts';
 
+const MUST_OUTPUT_CODE_BLOCKS = `You MUST output fenced code blocks. Do NOT write explanations or analysis without code. Every response MUST contain at least one fenced code block with a file path.`;
+
 export interface FixLoopConfig {
   readonly maxIterations: number;
   readonly integrationPort: number;
+  readonly systemPromptSuffix?: string;
 }
 
 export interface FixLoopDeps {
@@ -26,6 +31,7 @@ export interface FixLoopDeps {
   readonly qaAgent: QaAgent;
   readonly workspace: Workspace;
   readonly logger: Logger;
+  readonly dummyFactory?: OllamaFactory;
 }
 
 export async function runFixLoop(
@@ -46,10 +52,26 @@ export async function runFixLoop(
 
   const knowledgePath = workspace.taskQaKnowledgePath(task.id);
 
+  // Seed task knowledge from persistent knowledge base (docs/knowledge-bases/{taskId}-knowledge.md)
+  try {
+    const persistentKnowledgePath = `docs/knowledge-bases/${task.id}-knowledge.md`;
+    const persistentKnowledge = await readFile(persistentKnowledgePath, `utf-8`);
+    if (persistentKnowledge.trim().length > 0) {
+      await mkdir(knowledgePath.substring(0, knowledgePath.lastIndexOf(`/`) > -1 ? knowledgePath.lastIndexOf(`/`) : knowledgePath.lastIndexOf(`\\`)), { recursive: true });
+      await writeFile(knowledgePath, persistentKnowledge, `utf-8`);
+      logger.info(`[fix-loop] Seeded task knowledge from ${persistentKnowledgePath} (${persistentKnowledge.length} chars)`);
+    }
+  } catch {
+    // No persistent knowledge base for this task — that's fine
+  }
+
+  let existingCodeSummary: string | undefined;
   const completedCodeResult = await gatherExistingCode(workspace, task);
   if (completedCodeResult.ok) {
     existingCodeContext = completedCodeResult.value.context;
     depCodeFiles = completedCodeResult.value.files;
+    // Build a compact summary for fix mode — just file paths + exported names, not full code
+    existingCodeSummary = buildDependencySummary(depCodeFiles);
   }
 
   for (let iteration = 0; iteration < config.maxIterations; iteration++) {
@@ -92,6 +114,7 @@ export async function runFixLoop(
           taskId: task.id,
           mode: `generate`,
           existingCode: existingCodeContext,
+          systemPromptSuffix: config.systemPromptSuffix,
         }
       : {
           taskName: task.name,
@@ -101,7 +124,8 @@ export async function runFixLoop(
           mode: `fix`,
           previousCode: lastCode.map((f) => `// ${f.path}\n${f.content}`).join(`\n\n`),
           errors: [...lastErrors, ...knowledgeContext],
-          existingCode: existingCodeContext,
+          existingCode: existingCodeSummary,
+          systemPromptSuffix: config.systemPromptSuffix,
         };
 
     // Capture the user prompt for iteration logging
@@ -113,7 +137,7 @@ export async function runFixLoop(
           lastCode.map((f) => `// ${f.path}\n${f.content}`).join(`\n\n`),
           [...lastErrors, ...knowledgeContext],
           task.type,
-          existingCodeContext,
+          existingCodeSummary,
           task.id,
         );
 
@@ -124,9 +148,40 @@ export async function runFixLoop(
       iteration,
     };
 
-    const codegenResult = await codegenAgent.run(agentInput);
+    let codegenResult = await codegenAgent.run(agentInput);
+
+    // Tier 1 retry: if no code blocks found, retry once with stronger instruction
+    if (!codegenResult.ok && codegenResult.error.message.includes(NO_CODE_BLOCKS_ERROR)) {
+      logger.warn(`[fix-loop] No code blocks — retrying same model with stronger instruction`);
+      const retryInput: AgentInput<CodegenInput> = {
+        ...agentInput,
+        payload: {
+          ...agentInput.payload,
+          systemPromptSuffix: MUST_OUTPUT_CODE_BLOCKS,
+        },
+      };
+      const retryResult = await codegenAgent.run(retryInput);
+      if (retryResult.ok) {
+        codegenResult = retryResult;
+      } else {
+        logger.warn(`[fix-loop] Retry also failed: ${retryResult.error.message}`);
+      }
+    }
+
     if (!codegenResult.ok) {
       logger.error(`[fix-loop] CodeGen failed for task ${task.id}: ${codegenResult.error.message}`);
+
+      // Write best-effort code from previous iterations to shared output so downstream tasks can still import
+      if (lastCode.length > 0) {
+        logger.info(`[fix-loop] Writing ${lastCode.length} best-effort files to shared output after codegen crash`);
+        for (const file of lastCode) {
+          if (!file.path.includes(`.test.`)) {
+            const outputPath = `${workspace.outputDir()}/${file.path}`;
+            await writeCode(outputPath, file.content);
+          }
+        }
+      }
+
       await writeJson(workspace.taskStatusPath(task.id), {
         status: 'failed',
         iteration,
@@ -140,13 +195,21 @@ export async function runFixLoop(
       });
     }
 
-    const allFiles = codegenResult.value.payload;
+    let allFiles = codegenResult.value.payload;
     const codegenDurationMs = Math.round(performance.now() - codegenStartMs);
     logger.info(`[fix-loop] Step 1/3: CodeGen completed in ${codegenDurationMs}ms — ${allFiles.length} files (model: ${codegenResult.value.modelUsed})`);
 
-    // Separate test files from code files
+    // Separate test files from code files BEFORE truncation so tests don't get cut
     const testFiles = allFiles.filter((f) => f.path.includes(`.test.mts`) || f.path.includes(`.test.ts`));
     let codeFiles: readonly CodeFile[] = allFiles.filter((f) => !f.path.includes(`.test.mts`) && !f.path.includes(`.test.ts`));
+
+    // Guard: if codegen produces an absurd number of code files (>15), it went off the rails
+    // This happens when the LLM sees too much dependency code and regenerates everything
+    const MAX_CODE_FILES_PER_TASK = 15;
+    if (codeFiles.length > MAX_CODE_FILES_PER_TASK) {
+      logger.warn(`[fix-loop] Codegen produced ${codeFiles.length} code files (limit: ${MAX_CODE_FILES_PER_TASK}) — truncating`);
+      codeFiles = codeFiles.slice(0, MAX_CODE_FILES_PER_TASK);
+    }
 
     if (testFiles.length > 0) {
       logger.info(`[fix-loop] Codegen produced ${testFiles.length} test file(s) and ${codeFiles.length} code files`);
@@ -379,8 +442,22 @@ export async function runFixLoop(
       }
 
       // Copy completed code to shared output so downstream tasks can import it
+      // Also fix empty files: if foo.mts is empty but foo-source.mts exists, use the source file
       logger.info(`[fix-loop] Copying ${codeFiles.length} files to shared output dir`);
       for (const file of codeFiles) {
+        if (file.content.trim().length === 0) {
+          // Check for a -source.mts variant
+          const sourcePath = file.path.replace(/\.mts$/, `-source.mts`);
+          const sourceFile = codeFiles.find((f) => f.path === sourcePath);
+          if (sourceFile && sourceFile.content.trim().length > 0) {
+            logger.warn(`[fix-loop] Empty file ${file.path} — using ${sourcePath} content instead`);
+            const outputPath = `${workspace.outputDir()}/${file.path}`;
+            await writeCode(outputPath, sourceFile.content);
+            continue;
+          }
+          logger.warn(`[fix-loop] Skipping empty file: ${file.path}`);
+          continue;
+        }
         const outputPath = `${workspace.outputDir()}/${file.path}`;
         await writeCode(outputPath, file.content);
       }
@@ -476,6 +553,16 @@ export async function runFixLoop(
   // Copy best-effort code to shared output so downstream tasks can still reference it
   logger.info(`[fix-loop] Copying ${lastCode.length} best-effort files to shared output dir`);
   for (const file of lastCode) {
+    if (file.content.trim().length === 0) {
+      const sourcePath = file.path.replace(/\.mts$/, `-source.mts`);
+      const sourceFile = lastCode.find((f) => f.path === sourcePath);
+      if (sourceFile && sourceFile.content.trim().length > 0) {
+        logger.warn(`[fix-loop] Empty best-effort file ${file.path} — using ${sourcePath} content`);
+        await writeCode(`${workspace.outputDir()}/${file.path}`, sourceFile.content);
+        continue;
+      }
+      continue;
+    }
     const outputPath = `${workspace.outputDir()}/${file.path}`;
     await writeCode(outputPath, file.content);
   }
@@ -520,6 +607,55 @@ function extractPassingTestNames(output: string): Set<string> {
   }
 
   return passing;
+}
+
+function buildDependencySummary(depFiles: readonly CodeFile[]): string {
+  const lines: string[] = [];
+  for (const file of depFiles) {
+    const exports: string[] = [];
+    for (const m of file.content.matchAll(/^export\s+(?:const|function|class)\s+(\w+)/gm)) {
+      if (m[1]) exports.push(m[1]);
+    }
+    for (const m of file.content.matchAll(/^export\s+const\s+(\w+)\s*=/gm)) {
+      if (m[1] && !exports.includes(m[1])) exports.push(m[1]);
+    }
+    if (exports.length > 0) {
+      lines.push(`// ${file.path} — exports: ${exports.join(`, `)}`);
+      lines.push(`import { ${exports.join(`, `)} } from './${file.path}'`);
+    } else {
+      lines.push(`// ${file.path} (no named exports)`);
+    }
+
+    // For classes: extract public method signatures so downstream tasks know what methods exist
+    const classBlocks = file.content.matchAll(/export\s+class\s+(\w+)[^{]*\{([\s\S]*?)(?=\nexport|\n}\s*$)/gm);
+    for (const classMatch of classBlocks) {
+      const className = classMatch[1];
+      const classBody = classMatch[2] ?? ``;
+      const methods: string[] = [];
+      // Match public/async method signatures (not private/protected)
+      const methodPattern = /^\s+(?:public\s+)?(?:async\s+)?(\w+)\s*\(([^)]*)\)(?:\s*:\s*([^\n{]+))?/gm;
+      for (const mm of classBody.matchAll(methodPattern)) {
+        const name = mm[1];
+        if (name === `constructor` || name?.startsWith(`_`)) continue;
+        const params = mm[2]?.trim() ?? ``;
+        const ret = mm[3]?.trim() ?? `unknown`;
+        methods.push(`  ${name}(${params}): ${ret}`);
+      }
+      if (methods.length > 0) {
+        lines.push(`// ${className} methods:`);
+        lines.push(...methods);
+      }
+    }
+
+    // For exported functions: show signature
+    for (const fm of file.content.matchAll(/^export\s+(?:async\s+)?function\s+(\w+)\s*\(([^)]*)\)(?:\s*:\s*([^\n{]+))?/gm)) {
+      const name = fm[1];
+      const params = fm[2]?.trim() ?? ``;
+      const ret = fm[3]?.trim() ?? `unknown`;
+      lines.push(`// function ${name}(${params}): ${ret}`);
+    }
+  }
+  return lines.join(`\n`);
 }
 
 async function gatherExistingCode(workspace: Workspace, task: Task): Promise<Result<ExistingCode, Error>> {

@@ -4,20 +4,22 @@ Your job is to analyze a Product Requirements Document (PRD) and break it down i
 Each task should be a self-contained unit of work that produces one or more TypeScript files (.mts extension).
 
 ## Task Types
-- setup: Project scaffolding, config files, DI container setup
+- setup: Project scaffolding, config files, DI container setup, MongoDB connection (src/db.mts)
 - model: TypeBox schemas and type definitions — each schema in its own file under \`src/types/\` (e.g. \`src/types/create-todo-input.mts\`, \`src/types/todo-response.mts\`) with a barrel \`src/types/index.mts\`
-- repository: Data access layer classes with Result<T, E> return types
+- repository: Data access layer classes using MongoDB native driver, return Result<T, E> types
 - service: Business logic layer classes
-- middleware: Auth guards, error handlers, validators
+- middleware: Auth guards using Elysia .guard() + .resolve() pattern (NOT .derive()), error handlers, validators
 - endpoint: Elysia route handlers (controllers) — export Elysia plugins, NOT standalone apps
 
 ## Architecture Rules
 - All code uses strict TypeScript with .mts extensions
 - Elysia framework for HTTP routing
+- Database: MongoDB via the \`mongodb\` npm package (native driver) — NOT mongoose or SQLite
 - Dependency injection for all services/repositories
 - Repository pattern: all DB access through repos, repos return Result<T, E>
 - Controllers handle HTTP only, services handle business logic
 - TypeBox (@sinclair/typebox) for all validation (body, query, params) — Elysia's native validation library
+- Auth middleware uses Elysia \`.guard()\` + \`.resolve()\` pattern (NOT .derive())
 - Winston for structured logging
 - Every endpoint under /api/v1
 
@@ -39,7 +41,7 @@ You MUST respond with valid JSON matching this exact structure:
 
 ## Dependency Structure Rules (MANDATORY)
 1. There MUST be exactly ONE root task with id \`setup-foundation\`, type=setup, dependsOn=[].
-2. \`setup-foundation\` is MINIMAL: it produces ONLY src/index.mts (Elysia app + .onError() + health endpoint + .listen()), src/env.mts, and src/types/result.mts. Nothing else.
+2. \`setup-foundation\` is MINIMAL: it produces ONLY src/index.mts (Elysia app + .onError() + health endpoint + .listen()), src/db.mts (MongoDB connection), and src/types/result.mts. Nothing else. Do NOT generate src/env.mts — use process.env directly.
 3. Model tasks depend ONLY on \`setup-foundation\`. Model tasks produce files in \`src/types/\` (one schema per file) with a barrel \`src/types/index.mts\`. Do NOT put schemas in \`src/models/\`.
 4. Repository tasks depend on \`setup-foundation\` + their corresponding model task.
 5. Service tasks depend on their corresponding repository task.

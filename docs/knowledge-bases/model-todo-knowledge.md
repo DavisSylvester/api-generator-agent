@@ -45,3 +45,18 @@
 ```json
 { "error": "Test imports from index.mts which doesn't re-export all names after sanitization", "resolutionTried": "Moved test generation to codegen — same LLM writes code + tests, imports always match", "status": true }
 ```
+
+## Test files MUST be in tests/ only
+
+Test files are ONLY allowed in the `tests/` folder. NEVER place test files under `code/` or `code/tests/`. If bun test picks up a stale test copy from `code/tests/`, it will fail with "Cannot find module" because the `../code/` import prefix resolves to `code/code/` which does not exist.
+
+## Use await import() for project source files
+
+ESM hoists static `import` statements — they execute BEFORE `process.env` assignments. Always use `await import()` for project source files (`../code/src/...`). Only use static `import` for third-party libraries (`bun:test`, `elysia`, `mongodb`, `jose`).
+
+```typescript
+// CORRECT
+const { authRoutes } = await import('../code/src/routes/auth.mts')
+// WRONG — hoisted before env vars
+import { authRoutes } from '../code/src/routes/auth.mts'
+```

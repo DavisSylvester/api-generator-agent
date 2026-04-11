@@ -14,6 +14,8 @@ import {
 } from '../prompts/codegen.mts';
 import { streamInvoke } from '../llm/stream-invoke.mts';
 
+export const NO_CODE_BLOCKS_ERROR = `No code blocks found in codegen response`;
+
 export interface CodegenInput {
   readonly taskName: string;
   readonly taskDescription: string;
@@ -23,6 +25,7 @@ export interface CodegenInput {
   readonly existingCode?: string;
   readonly previousCode?: string;
   readonly errors?: readonly string[];
+  readonly systemPromptSuffix?: string;
 }
 
 export interface CodeFile {
@@ -43,7 +46,7 @@ export class CodegenAgent extends BaseAgent<CodegenInput, CodegenOutput> {
     chatModel: BaseChatModel,
     traceConfig: Record<string, unknown>,
   ): Promise<Result<CodegenOutput, Error>> {
-    const { taskName, taskDescription, taskType, taskId, mode, existingCode, previousCode, errors } = input.payload;
+    const { taskName, taskDescription, taskType, taskId, mode, existingCode, previousCode, errors, systemPromptSuffix } = input.payload;
 
     this.logger.info(`[codegen] Task: "${taskName}" | Type: ${taskType ?? `unknown`} | Mode: ${mode} | Iteration: ${input.iteration}`);
     if (mode === 'fix' && errors) {
@@ -57,8 +60,12 @@ export class CodegenAgent extends BaseAgent<CodegenInput, CodegenOutput> {
       userPrompt = createCodegenUserPrompt(taskName, taskDescription, existingCode, taskType, taskId);
     }
 
+    const systemPrompt = systemPromptSuffix
+      ? `${CODEGEN_SYSTEM_PROMPT}\n\n${systemPromptSuffix}`
+      : CODEGEN_SYSTEM_PROMPT;
+
     const messages = [
-      new SystemMessage(CODEGEN_SYSTEM_PROMPT),
+      new SystemMessage(systemPrompt),
       new HumanMessage(userPrompt),
     ];
 
@@ -85,7 +92,7 @@ export class CodegenAgent extends BaseAgent<CodegenInput, CodegenOutput> {
     if (sanitized.length === 0) {
       this.logger.warn('[codegen] No code blocks found in LLM response');
       this.logger.warn(`[codegen] Raw response (first 500 chars): ${content.substring(0, 500)}`);
-      return err(new Error('No code blocks found in codegen response'));
+      return err(new Error(NO_CODE_BLOCKS_ERROR));
     }
 
     this.logger.info(`[codegen] Generated ${sanitized.length} files:`);
@@ -175,12 +182,87 @@ function sanitizeCodeFiles(files: readonly CodeFile[], logger: Logger): CodeFile
       logger.warn(`[codegen] Removed export type aliases (Static<>) in ${file.path}`);
     }
 
+    // Fix test file imports missing ../code/ prefix
+    // Tests live in tests/ and source in code/ — imports like '../src/...' need '../code/src/...'
+    if (file.path.includes(`.test.`)) {
+      const fixedContent = content.replace(
+        /from\s+['"]\.\.\/src\//g,
+        `from '../code/src/`,
+      );
+      if (fixedContent !== content) {
+        content = fixedContent;
+        logger.warn(`[codegen] Fixed test imports: ../src/ → ../code/src/ in ${file.path}`);
+      }
+
+      // Convert static imports of project source files to dynamic await import()
+      // Static imports are hoisted by ESM and execute before process.env assignments
+      const staticProjectImport = /^import\s+\{([^}]+)\}\s+from\s+['"](\.\.\/(code\/)?src\/[^'"]+)['"]/gm;
+      let dynamicContent = content;
+      let hadStaticImports = false;
+      dynamicContent = dynamicContent.replace(staticProjectImport, (match, names: string, path: string) => {
+        hadStaticImports = true;
+        const trimmedNames = names.trim();
+        return `const { ${trimmedNames} } = await import('${path}')`;
+      });
+      if (hadStaticImports) {
+        content = dynamicContent;
+        logger.warn(`[codegen] Converted static imports to await import() in test file ${file.path}`);
+      }
+    }
+
+    // Fix non-async .resolve() / .guard() / .derive() callbacks that contain await
+    // The LLM consistently forgets to add async to these callbacks
+    const resolveAwaitPattern = /\.(resolve|derive|guard)\(\s*\(\s*(\{[^}]*\}|\w+)\s*\)\s*=>\s*\{[^}]*await\s/g;
+    if (resolveAwaitPattern.test(content)) {
+      content = content.replace(
+        /\.(resolve|derive|guard)\(\s*\((\s*\{[^}]*\}|\s*\w+)\s*\)\s*=>/g,
+        (match, method, params) => `.${method}(async (${params.trim()}) =>`,
+      );
+      logger.warn(`[codegen] Added async to .resolve()/.guard() callbacks with await in ${file.path}`);
+    }
+
+    // Auto-replace .derive() with .resolve() for auth patterns (LLM may still emit .derive())
+    if (content.includes(`.derive(`) && (content.includes(`jwtVerify`) || content.includes(`authorization`))) {
+      content = content.replace(/\.derive\(/g, `.resolve(`);
+      logger.warn(`[codegen] Replaced .derive() with .resolve() in auth code in ${file.path}`);
+    }
+
+    // Auto-inject .as('plugin') on auth middleware plugins that use .resolve()
+    // Without .as('plugin'), Elysia scopes guard/resolve to the plugin — they don't apply to parent routes
+    if (content.includes(`.resolve(`) && content.includes(`authMiddleware`) && !content.includes(`.as(`)) {
+      content = content.replace(
+        /(\.resolve\(async\s*\([^)]*\)\s*=>\s*\{[\s\S]*?\n\s*\}\))/,
+        `$1\n  .as('plugin')`,
+      );
+      logger.warn(`[codegen] Added .as('plugin') to auth middleware in ${file.path}`);
+    }
+
+    // Remove imports of env.mts — we use process.env directly, no env module
+    if (/import\s+\{[^}]*\}\s+from\s+['"][^'"]*env\.mts['"]/g.test(content)) {
+      // Replace env.X references with process.env.X ?? 'default'
+      content = content.replace(/import\s+\{[^}]*\}\s+from\s+['"][^'"]*env\.mts['"].*\n?/g, ``);
+      content = content.replace(/env\.JWT_SECRET/g, `(process.env.JWT_SECRET ?? 'dev-secret')`);
+      content = content.replace(/env\.MONGODB_URI/g, `(process.env.MONGODB_URI ?? 'mongodb://localhost:27017/my-app')`);
+      content = content.replace(/env\.PORT/g, `(process.env.PORT ?? '3000')`);
+      content = content.replace(/env\.NODE_ENV/g, `(process.env.NODE_ENV ?? 'development')`);
+      logger.warn(`[codegen] Removed env.mts import — replaced with process.env in ${file.path}`);
+    }
+
     return content !== file.content ? { path: file.path, content } : file;
+  });
+
+  // Filter out env.mts files entirely — we don't generate them
+  const pass1Filtered = pass1.filter((file) => {
+    if (file.path.endsWith(`env.mts`) && !file.path.includes(`test`)) {
+      logger.warn(`[codegen] Removed generated env.mts file — use process.env directly`);
+      return false;
+    }
+    return true;
   });
 
   // Pass 2: clean barrel re-exports — remove names that source files don't export
   const exportMap = new Map<string, Set<string>>();
-  for (const file of pass1) {
+  for (const file of pass1Filtered) {
     const names = new Set<string>();
     for (const match of file.content.matchAll(/^export\s+(?:const|function|class)\s+(\w+)/gm)) {
       if (match[1]) names.add(match[1]);
@@ -188,7 +270,7 @@ function sanitizeCodeFiles(files: readonly CodeFile[], logger: Logger): CodeFile
     exportMap.set(file.path, names);
   }
 
-  return pass1.map((file) => {
+  return pass1Filtered.map((file) => {
     // Only process barrel files (files with re-export lines)
     if (!file.content.includes(`} from './`) && !file.content.includes(`} from "../`)) {
       return file;

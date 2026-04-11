@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 const envSchema = z.object({
   ANTHROPIC_API_KEY: z.string().optional(),
+  OPENAI_API_KEY: z.string().optional(),
   OLLAMA_HOST: z.string().url().default(`http://192.168.128.230:11434`),
   OLLAMA_API_KEY: z.string().optional(),
   LANGSMITH_TRACING: z
