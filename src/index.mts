@@ -3,52 +3,82 @@ import { resolve } from 'node:path';
 import { loadEnv } from './config/env.mts';
 import { createContainer } from './container/di.mts';
 import { runPipeline } from './orchestrator/pipeline.mts';
+import { parseArgs, printHelp } from './cli/parse-args.mts';
+import { listRuns } from './cli/list-runs.mts';
+import { showStatus } from './cli/show-status.mts';
 
 async function main(): Promise<void> {
-  const args = process.argv.slice(2);
-  const prdPath = args[0];
-  const maxIterations = args[1] ? parseInt(args[1], 10) : undefined;
-  const maxTasks = args[2] ? parseInt(args[2], 10) : undefined;
+  const options = parseArgs(process.argv);
 
-  if (!prdPath) {
-    console.error('Usage: bun run src/index.mts <prd-file> [max-iterations] [max-tasks]');
-    console.error('');
-    console.error('Arguments:');
-    console.error('  prd-file         Path to the PRD markdown/text file');
-    console.error('  max-iterations   Max fix loop iterations (default: 5)');
-    console.error('  max-tasks        Max tasks to run (default: all)');
-    process.exit(1);
+  if (options.command === `help`) {
+    printHelp();
+    process.exit(0);
   }
 
   const env = loadEnv();
 
+  if (options.command === `list-runs`) {
+    await listRuns(env.WORKSPACE_DIR);
+    process.exit(0);
+  }
+
+  if (options.command === `status`) {
+    await showStatus(env.WORKSPACE_DIR, options.statusRunId!);
+    process.exit(0);
+  }
+
+  // Command is `run` — need either --prd or --resume
   const container = createContainer(env);
   const { logger, pipelineConfig } = container;
 
-  const resolvedPath = resolve(prdPath);
-  logger.info(`Reading PRD from: ${resolvedPath}`);
+  // Build effective config from CLI flags + env defaults
+  let effectiveConfig = { ...pipelineConfig };
 
-  let prdText: string;
-  try {
-    prdText = await readFile(resolvedPath, 'utf-8');
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    logger.error(`Failed to read PRD file: ${msg}`);
+  if (options.iterations !== undefined && !isNaN(options.iterations)) {
+    effectiveConfig = { ...effectiveConfig, maxFixIterations: options.iterations };
+  }
+
+  if (options.maxTasks !== undefined && !isNaN(options.maxTasks)) {
+    effectiveConfig = { ...effectiveConfig, maxTasks: options.maxTasks };
+    logger.info(`Max tasks: ${options.maxTasks}`);
+  }
+
+  if (options.concurrency !== undefined && !isNaN(options.concurrency)) {
+    effectiveConfig = { ...effectiveConfig, maxConcurrency: options.concurrency };
+  }
+
+  if (options.noDiagrams) {
+    effectiveConfig = { ...effectiveConfig, skipDiagrams: true };
+  }
+
+  if (options.noDocs) {
+    effectiveConfig = { ...effectiveConfig, skipDocs: true };
+  }
+
+  if (options.resume) {
+    effectiveConfig = { ...effectiveConfig, resumeRunId: options.resume };
+  }
+
+  // Load PRD text (required for new runs, optional for resume)
+  let prdText = ``;
+  if (options.prd) {
+    const resolvedPath = resolve(options.prd);
+    logger.info(`Reading PRD from: ${resolvedPath}`);
+    try {
+      prdText = await readFile(resolvedPath, 'utf-8');
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      logger.error(`Failed to read PRD file: ${msg}`);
+      process.exit(1);
+    }
+    logger.info(`PRD loaded (${prdText.length} chars)`);
+  } else if (!options.resume) {
+    logger.error(`No PRD file specified. Use --prd <file> or --resume <run-id>.`);
     process.exit(1);
   }
 
-  logger.info(`PRD loaded (${prdText.length} chars)`);
-  logger.info(`Config: maxIterations=${pipelineConfig.maxFixIterations}, concurrency=${pipelineConfig.maxConcurrency}`);
-  logger.info(`LLM provider: Ollama (${pipelineConfig.ollamaHost})`);
-
-  let effectiveConfig = maxIterations !== undefined && !isNaN(maxIterations)
-    ? { ...pipelineConfig, maxFixIterations: maxIterations }
-    : { ...pipelineConfig };
-
-  if (maxTasks !== undefined && !isNaN(maxTasks)) {
-    effectiveConfig = { ...effectiveConfig, maxTasks };
-    logger.info(`Max tasks: ${maxTasks}`);
-  }
+  logger.info(`Config: maxIterations=${effectiveConfig.maxFixIterations}, concurrency=${effectiveConfig.maxConcurrency}`);
+  logger.info(`LLM provider: Ollama (${effectiveConfig.ollamaHost})`);
 
   const result = await runPipeline(prdText, effectiveConfig, {
     planningAgent: container.planningAgent,
@@ -59,6 +89,7 @@ async function main(): Promise<void> {
     logger,
     fallbackTiers: container.fallbackTiers,
     localFactory: container.localFactory,
+    notifier: container.notifier,
   });
 
   if (!result.ok) {
@@ -85,14 +116,21 @@ async function main(): Promise<void> {
 
   logger.info(`Workspace: .workspace/${pipeline.runId}/`);
 
+  if (failed > 0) {
+    const completedIds = pipeline.taskStates.filter((s) => s.status === `completed`).map((s) => s.taskId);
+    if (completedIds.length > 0) {
+      logger.info(`Resume with: bun run src/index.mts --resume ${pipeline.runId}`);
+    }
+  }
+
   const hardFailures = pipeline.taskStates.filter((s) => s.lastError?.includes(`HARD FAILURE`));
   if (hardFailures.length > 0) {
-    logger.error(`\n${'═'.repeat(60)}`);
+    logger.error(`\n${'='.repeat(60)}`);
     logger.error(`HARD FAILURE — ${hardFailures.length} task(s) need human help:`);
     for (const hf of hardFailures) {
       logger.error(`  - ${hf.taskId}: ${hf.lastError}`);
     }
-    logger.error(`${'═'.repeat(60)}`);
+    logger.error(`${'='.repeat(60)}`);
     process.exit(2);
   }
 

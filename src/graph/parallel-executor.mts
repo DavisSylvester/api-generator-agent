@@ -7,6 +7,7 @@ export type TaskProcessor = (task: Task) => Promise<Result<TaskState, Error>>;
 
 export interface ExecutorConfig {
   readonly maxConcurrency: number;
+  readonly preCompleted?: ReadonlyMap<string, TaskState>;
 }
 
 export async function executeGraph(
@@ -18,6 +19,19 @@ export async function executeGraph(
   const completed = new Set<string>();
   const failed = new Set<string>();
   const results = new Map<string, TaskState>();
+
+  // Pre-populate with previously completed tasks (for resume)
+  if (config.preCompleted) {
+    for (const [taskId, state] of config.preCompleted) {
+      results.set(taskId, state);
+      if (state.status === `completed`) {
+        completed.add(taskId);
+        logger.info(`[resume] Skipping completed task: ${taskId}`);
+      } else if (state.status === `failed` || state.status === `skipped`) {
+        failed.add(taskId);
+      }
+    }
+  }
 
   const totalTasks = graph.tasks.length;
 

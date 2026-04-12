@@ -18,6 +18,7 @@ import { runFallbackFixLoop } from './fallback-fix-loop.mts';
 import type { FallbackTier } from '../config/fallback-tiers.mts';
 import type { OllamaFactory } from '../llm/ollama-factory.mts';
 import { tokenTracker } from '../llm/token-tracker.mts';
+import type { Notifier } from '../notifications/notifier.mts';
 import type { PlanningAgent } from '../agents/planning-agent.mts';
 import type { CodegenAgent } from '../agents/codegen-agent.mts';
 import type { EslintAgent } from '../agents/eslint-agent.mts';
@@ -46,6 +47,7 @@ export interface PipelineDeps {
   readonly logger: Logger;
   readonly fallbackTiers?: readonly FallbackTier[];
   readonly localFactory?: OllamaFactory;
+  readonly notifier?: Notifier;
 }
 
 export async function runPipeline(
@@ -54,14 +56,36 @@ export async function runPipeline(
   deps: PipelineDeps,
 ): Promise<Result<PipelineResult, Error>> {
   const startMs = performance.now();
-  const runId = crypto.randomUUID();
+  const isResume = !!config.resumeRunId;
+  const runId = config.resumeRunId ?? crypto.randomUUID();
   const { logger } = deps;
 
-  logger.info(`Starting pipeline run: ${runId}`);
+  logger.info(`${isResume ? `Resuming` : `Starting`} pipeline run: ${runId}`);
 
-  // Phase 1: Create workspace
+  // Phase 0: Create or resume workspace
   const workspace = new Workspace(config.workspaceDir, runId);
-  await workspace.init();
+  let preCompletedMap: ReadonlyMap<string, TaskState> | undefined;
+
+  if (isResume) {
+    try {
+      await workspace.initForResume();
+    } catch {
+      return err(new Error(`Cannot resume run ${runId} — workspace not found at ${workspace.root}`));
+    }
+    const completedIds = await workspace.loadCompletedTaskIds();
+    if (completedIds.size > 0) {
+      const map = new Map<string, TaskState>();
+      for (const taskId of completedIds) {
+        map.set(taskId, { taskId, status: `completed`, iteration: 0 });
+      }
+      preCompletedMap = map;
+      logger.info(`[resume] Found ${completedIds.size} completed tasks to skip: ${[...completedIds].join(`, `)}`);
+    } else {
+      logger.info(`[resume] No completed tasks found — running all tasks`);
+    }
+  } else {
+    await workspace.init();
+  }
 
   // Add file transport so all logs are persisted to the workspace
   logger.add(new winston.transports.File({
@@ -72,7 +96,7 @@ export async function runPipeline(
     ),
   }));
 
-  logger.info(`Workspace created: ${workspace.root}`);
+  logger.info(`Workspace: ${workspace.root}`);
   logger.info(`Run log: ${workspace.runLogPath()}`);
   logger.info(`Config: maxIterations=${config.maxFixIterations}, concurrency=${config.maxConcurrency}, integrationPort=${config.integrationPort}`);
 
@@ -85,58 +109,95 @@ export async function runPipeline(
     maxTasks: config.maxTasks,
     integrationPort: config.integrationPort,
     startedAt: new Date().toISOString(),
+    resumed: isResume,
   });
 
-  // Phase 1: Planning (with cache)
-  logger.info(`Phase 1: Planning — generating task graph from PRD`);
-
-  const prdHasher = new Bun.CryptoHasher('sha256');
-  prdHasher.update(prdText);
-  const prdHash = prdHasher.digest('hex');
-  const planCachePath = workspace.planCachePath(prdHash);
-
+  // Phase 1: Planning (load from workspace on resume, or cache/generate)
   let taskGraph: TaskGraph | undefined;
   let planFromCache = false;
 
-  // Check for cached plan
-  const cachedResult = await readJson<unknown>(planCachePath);
-  if (cachedResult.ok) {
-    const validation = cachedTaskGraphSchema.safeParse(cachedResult.value);
-    if (validation.success) {
-      taskGraph = {
-        runId,
-        prdHash: validation.data.prdHash,
-        tasks: validation.data.tasks as readonly Task[],
-      };
-      planFromCache = true;
-      logger.info(`Using cached plan for PRD hash ${prdHash} (${taskGraph.tasks.length} tasks)`);
-    } else {
-      logger.warn(`Cached plan for PRD hash ${prdHash} failed validation — regenerating`);
+  if (isResume) {
+    logger.info(`Phase 1: Loading plan from previous run`);
+    const planResult = await readJson<unknown>(workspace.planPath());
+    if (planResult.ok) {
+      const validation = cachedTaskGraphSchema.safeParse(planResult.value);
+      if (validation.success) {
+        taskGraph = {
+          runId,
+          prdHash: validation.data.prdHash,
+          tasks: validation.data.tasks as readonly Task[],
+        };
+        planFromCache = true;
+        logger.info(`Loaded plan from previous run (${taskGraph.tasks.length} tasks)`);
+      }
+    }
+    if (!taskGraph) {
+      return err(new Error(`Cannot resume — plan.json missing or invalid in ${workspace.root}`));
     }
   } else {
-    logger.info(`No cached plan found for PRD hash ${prdHash}, generating...`);
-  }
+    logger.info(`Phase 1: Planning — generating task graph from PRD`);
 
-  if (!taskGraph) {
-    const planInput: AgentInput<string> = {
-      runId,
-      payload: prdText,
-      iteration: 0,
-    };
+    const prdHasher = new Bun.CryptoHasher('sha256');
+    prdHasher.update(prdText);
+    const prdHash = prdHasher.digest('hex');
+    const planCachePath = workspace.planCachePath(prdHash);
 
-    const planResult = await deps.planningAgent.run(planInput);
-    if (!planResult.ok) {
-      return err(new Error(`Planning failed: ${planResult.error.message}`));
+    // Check for cached plan
+    const cachedResult = await readJson<unknown>(planCachePath);
+    if (cachedResult.ok) {
+      const validation = cachedTaskGraphSchema.safeParse(cachedResult.value);
+      if (validation.success) {
+        taskGraph = {
+          runId,
+          prdHash: validation.data.prdHash,
+          tasks: validation.data.tasks as readonly Task[],
+        };
+        planFromCache = true;
+        logger.info(`Using cached plan for PRD hash ${prdHash} (${taskGraph.tasks.length} tasks)`);
+      } else {
+        logger.warn(`Cached plan for PRD hash ${prdHash} failed validation — regenerating`);
+      }
+    } else {
+      logger.info(`No cached plan found for PRD hash ${prdHash}, generating...`);
     }
 
-    taskGraph = planResult.value.payload;
-    const planDurationMs = Math.round(performance.now() - startMs);
-    logger.info(`Planning complete: ${taskGraph.tasks.length} tasks generated in ${planDurationMs}ms (model: ${planResult.value.modelUsed})`);
+    if (!taskGraph) {
+      const planInput: AgentInput<string> = {
+        runId,
+        payload: prdText,
+        iteration: 0,
+      };
+
+      const planResult = await deps.planningAgent.run(planInput);
+      if (!planResult.ok) {
+        return err(new Error(`Planning failed: ${planResult.error.message}`));
+      }
+
+      taskGraph = planResult.value.payload;
+      const planDurationMs = Math.round(performance.now() - startMs);
+      logger.info(`Planning complete: ${taskGraph.tasks.length} tasks generated in ${planDurationMs}ms (model: ${planResult.value.modelUsed})`);
+    }
+
+    // Cache the plan for future runs (skip if it came from cache)
+    if (!planFromCache) {
+      const prdHasher2 = new Bun.CryptoHasher('sha256');
+      prdHasher2.update(prdText);
+      const prdHash2 = prdHasher2.digest('hex');
+      const planCachePath2 = workspace.planCachePath(prdHash2);
+      await mkdir(dirname(planCachePath2), { recursive: true });
+      const cacheWriteResult = await writeJson(planCachePath2, taskGraph);
+      if (cacheWriteResult.ok) {
+        logger.info(`Plan cached at ${planCachePath2}`);
+      } else {
+        logger.warn(`Failed to cache plan: ${cacheWriteResult.error.message}`);
+      }
+    }
   }
 
   // Log each task in the plan
   for (const task of taskGraph.tasks) {
-    logger.info(`  [plan] Task: ${task.id} — "${task.name}" (depends: [${task.dependsOn.join(', ')}])`);
+    const skipTag = preCompletedMap?.has(task.id) ? ` [SKIP — completed]` : ``;
+    logger.info(`  [plan] Task: ${task.id} — "${task.name}" (depends: [${task.dependsOn.join(', ')}])${skipTag}`);
   }
 
   // Trim to maxTasks if set
@@ -152,20 +213,9 @@ export async function runPipeline(
   }
 
   // Validate DAG
-  const validation = validateGraph(taskGraph);
-  if (!validation.ok) {
-    return err(new Error(`Invalid task graph: ${validation.error.message}`));
-  }
-
-  // Cache the plan for future runs (skip if it came from cache)
-  if (!planFromCache) {
-    await mkdir(dirname(planCachePath), { recursive: true });
-    const cacheWriteResult = await writeJson(planCachePath, taskGraph);
-    if (cacheWriteResult.ok) {
-      logger.info(`Plan cached at ${planCachePath}`);
-    } else {
-      logger.warn(`Failed to cache plan: ${cacheWriteResult.error.message}`);
-    }
+  const dagValidation = validateGraph(taskGraph);
+  if (!dagValidation.ok) {
+    return err(new Error(`Invalid task graph: ${dagValidation.error.message}`));
   }
 
   // Write plan
@@ -175,7 +225,12 @@ export async function runPipeline(
   }
 
   // Phase 2: Execute tasks
-  logger.info(`Phase 2: Executing task graph`);
+  logger.info(`Phase 2: Executing task graph${preCompletedMap ? ` (${preCompletedMap.size} pre-completed)` : ``}`);
+
+  // Start notifier status updates
+  const notifier = deps.notifier;
+  notifier?.start(taskGraph.tasks.length);
+
   const taskStates = await executeGraph(
     taskGraph,
     async (task) => {
@@ -191,16 +246,60 @@ export async function runPipeline(
       };
       const fixConfig = { maxIterations: config.maxFixIterations, integrationPort: taskPort };
 
+      await notifier?.notify({
+        type: `task_started`,
+        taskId: task.id,
+        taskName: task.name,
+        message: `Starting ${task.name}`,
+        timestamp: new Date().toISOString(),
+      });
+
+      let result;
       // Use fallback system if tiers are configured, otherwise plain fix loop
       if (deps.fallbackTiers && deps.fallbackTiers.length > 0) {
-        return runFallbackFixLoop(task, runId, fixDeps, {
+        result = await runFallbackFixLoop(task, runId, fixDeps, {
           primaryConfig: fixConfig,
           fallbackTiers: deps.fallbackTiers,
         });
+      } else {
+        result = await runFixLoop(task, runId, fixDeps, fixConfig);
       }
-      return runFixLoop(task, runId, fixDeps, fixConfig);
+
+      // Notify on result
+      if (result.ok) {
+        const state = result.value;
+        if (state.status === `completed`) {
+          await notifier?.notify({
+            type: `task_passed`,
+            taskId: task.id,
+            taskName: task.name,
+            message: `${task.name} passed`,
+            iteration: state.iteration,
+            timestamp: new Date().toISOString(),
+          });
+        } else if (state.lastError?.includes(`HARD FAILURE`)) {
+          await notifier?.notify({
+            type: `hard_failure`,
+            taskId: task.id,
+            taskName: task.name,
+            message: state.lastError,
+            timestamp: new Date().toISOString(),
+          });
+        } else {
+          await notifier?.notify({
+            type: `task_failed`,
+            taskId: task.id,
+            taskName: task.name,
+            message: state.lastError ?? `Failed`,
+            iteration: state.iteration,
+            timestamp: new Date().toISOString(),
+          });
+        }
+      }
+
+      return result;
     },
-    { maxConcurrency: config.maxConcurrency },
+    { maxConcurrency: config.maxConcurrency, preCompleted: preCompletedMap },
     logger,
   );
 
@@ -293,8 +392,12 @@ export async function runPipeline(
   await writeJson(`${workspace.root}/integration-results.json`, integrationResults);
 
   // Phase 3: Documentation
-  logger.info(`Phase 3: Generating documentation`);
   let documentationGenerated = false;
+
+  if (config.skipDocs) {
+    logger.info(`Phase 3: Documentation — skipped (--no-docs)`);
+  } else {
+    logger.info(`Phase 3: Generating documentation`);
 
   const allCode = await gatherAllCode(workspace, taskGraph);
   if (allCode) {
@@ -313,8 +416,12 @@ export async function runPipeline(
       logger.error(`Documentation generation failed: ${docResult.error.message}`);
     }
   }
+  } // end skipDocs guard
 
   // Phase 4: Generate architecture diagrams via diagram-agent
+  if (config.skipDiagrams) {
+    logger.info(`Phase 4: Diagrams — skipped (--no-diagrams)`);
+  } else {
   logger.info(`Phase 4: Generating architecture diagrams`);
   try {
     // Build a system description from the PRD + task results for the diagram agent
@@ -366,6 +473,7 @@ export async function runPipeline(
     const msg = e instanceof Error ? e.message : String(e);
     logger.warn(`[pipeline] Diagram generation skipped: ${msg}`);
   }
+  } // end skipDiagrams guard
 
   // Clean up MongoDB Docker container
   try {
@@ -378,6 +486,18 @@ export async function runPipeline(
   const durationMs = Math.round(performance.now() - startMs);
 
   logger.info(`Pipeline complete in ${durationMs}ms`);
+
+  // Stop notifier and send final notification
+  notifier?.stop();
+  await notifier?.notify({
+    type: `pipeline_complete`,
+    message: `${completedCount}/${taskGraph.tasks.length} passed, ${failedCount} failed (${Math.round(durationMs / 1000)}s)`,
+    passed: completedCount,
+    failed: failedCount,
+    total: taskGraph.tasks.length,
+    durationMs,
+    timestamp: new Date().toISOString(),
+  });
 
   // Token usage summary
   const tokenUsage = tokenTracker.getCumulative();

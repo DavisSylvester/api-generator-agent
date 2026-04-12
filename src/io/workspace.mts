@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, access, readdir } from 'node:fs/promises';
 
 export class Workspace {
 
@@ -18,6 +18,35 @@ export class Workspace {
     await mkdir(this.docsDir(), { recursive: true });
     await mkdir(join(this.root, 'logs'), { recursive: true });
     await mkdir(this.outputDir(), { recursive: true });
+  }
+
+  public async initForResume(): Promise<void> {
+    await access(this.root);
+    // Ensure log dir exists for appending
+    await mkdir(join(this.root, 'logs'), { recursive: true });
+  }
+
+  public async loadCompletedTaskIds(): Promise<ReadonlySet<string>> {
+    const completed = new Set<string>();
+    const tasksDir = join(this.root, 'tasks');
+    let taskDirs: string[];
+    try {
+      taskDirs = await readdir(tasksDir);
+    } catch {
+      return completed;
+    }
+    for (const taskId of taskDirs) {
+      try {
+        const statusPath = this.taskStatusPath(taskId);
+        const raw = await Bun.file(statusPath).json();
+        if (raw && raw.status === `completed`) {
+          completed.add(taskId);
+        }
+      } catch {
+        // No status.json or not completed — skip
+      }
+    }
+    return completed;
   }
 
   public async initTask(taskId: string): Promise<void> {

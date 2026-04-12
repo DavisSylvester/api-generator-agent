@@ -7,6 +7,9 @@ export interface PipelineConfig {
   readonly ollamaHost: string;
   readonly maxTasks?: number;
   readonly integrationPort: number;
+  readonly resumeRunId?: string;
+  readonly skipDiagrams?: boolean;
+  readonly skipDocs?: boolean;
 }
 
 export interface PipelineResult {
