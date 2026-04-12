@@ -36,7 +36,7 @@ export async function scaffoldProject(
   await writeFile(join(outputDir, `.gitignore`), GITIGNORE, `utf-8`);
   logger.info(`[scaffold] Wrote .gitignore`);
 
-  // 7. Copy assembled index.mts over the output one if it exists
+  // 7. Copy assembled index.mts over the output one if it exists, then inject swagger
   const assembledPath = join(workspace.docsDir(), `assembled-index.mts`);
   const outputIndexPath = join(outputDir, `src`, `index.mts`);
   try {
@@ -47,7 +47,25 @@ export async function scaffoldProject(
     logger.info(`[scaffold] No assembled index.mts — keeping original`);
   }
 
-  // 8. Write README.md
+  // 8. Inject swagger into index.mts
+  try {
+    let indexContent = await readFile(outputIndexPath, `utf-8`);
+    if (!indexContent.includes(`@elysiajs/swagger`)) {
+      // Add import at top
+      indexContent = `import { swagger } from '@elysiajs/swagger'\n` + indexContent;
+      // Add .use(swagger()) after new Elysia()
+      indexContent = indexContent.replace(
+        /new Elysia\(\)/,
+        `new Elysia()\n  .use(swagger({ path: '/swagger', documentation: { info: { title: '${projectName}', version: '0.1.0' } } }))`,
+      );
+      await writeFile(outputIndexPath, indexContent, `utf-8`);
+      logger.info(`[scaffold] Injected swagger at /swagger`);
+    }
+  } catch {
+    logger.warn(`[scaffold] Could not inject swagger into index.mts`);
+  }
+
+  // 9. Write README.md
   await writeFile(join(outputDir, `README.md`), buildReadme(projectName, graph, envVars), `utf-8`);
   logger.info(`[scaffold] Wrote README.md`);
 
@@ -92,6 +110,7 @@ function analyzeSource(files: Map<string, string>): SourceAnalysis {
 
   // Baseline deps always needed
   dependencies.add(`elysia`);
+  dependencies.add(`@elysiajs/swagger`);
   dependencies.add(`mongodb`);
   dependencies.add(`@sinclair/typebox`);
   dependencies.add(`jose`);
