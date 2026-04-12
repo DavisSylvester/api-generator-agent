@@ -17,6 +17,9 @@ const envSchema = z.object({
   WORKSPACE_DIR: z.string().default('.workspace'),
   LLM_TIMEOUT_MS: z.coerce.number().int().min(10000).max(3600000).default(1800000),
   INTEGRATION_PORT: z.coerce.number().int().min(1024).max(65535).default(4100),
+  TELEGRAM_BOT_TOKEN: z.string().optional(),
+  TELEGRAM_CHAT_ID: z.string().optional(),
+  NOTIFICATION_INTERVAL_MS: z.coerce.number().int().min(60000).max(3600000).default(300000),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;

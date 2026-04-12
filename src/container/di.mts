@@ -12,6 +12,10 @@ import { DocumentationAgent } from '../agents/documentation-agent.mts';
 import { AnthropicFactory } from '../llm/anthropic-factory.mts';
 import { OpenAIFactory } from '../llm/openai-factory.mts';
 import type { FallbackTier } from '../config/fallback-tiers.mts';
+import { Notifier } from '../notifications/notifier.mts';
+import { TelegramChannel } from '../notifications/telegram-channel.mts';
+import { ConsoleChannel } from '../notifications/console-channel.mts';
+import type { NotificationChannel } from '../notifications/notifier.mts';
 
 export interface Container {
 
@@ -25,6 +29,7 @@ export interface Container {
   readonly documentationAgent: DocumentationAgent;
   readonly pipelineConfig: PipelineConfig;
   readonly fallbackTiers: readonly FallbackTier[];
+  readonly notifier: Notifier;
 }
 
 export function createContainer(env: EnvConfig): Container {
@@ -133,6 +138,22 @@ export function createContainer(env: EnvConfig): Container {
     integrationPort: env.INTEGRATION_PORT,
   };
 
+  // Build notification channels
+  const channels: NotificationChannel[] = [new ConsoleChannel(logger)];
+
+  if (env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID) {
+    channels.push(new TelegramChannel({
+      botToken: env.TELEGRAM_BOT_TOKEN,
+      chatId: env.TELEGRAM_CHAT_ID,
+    }));
+    logger.info(`Telegram notifications enabled (chat: ${env.TELEGRAM_CHAT_ID})`);
+  }
+
+  const notifier = new Notifier({
+    channels,
+    statusIntervalMs: env.NOTIFICATION_INTERVAL_MS,
+  });
+
   return {
     logger,
     localFactory,
@@ -144,5 +165,6 @@ export function createContainer(env: EnvConfig): Container {
     documentationAgent,
     pipelineConfig,
     fallbackTiers,
+    notifier,
   };
 }
