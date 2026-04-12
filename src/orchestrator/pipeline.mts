@@ -23,6 +23,7 @@ import type { PlanningAgent } from '../agents/planning-agent.mts';
 import type { CodegenAgent } from '../agents/codegen-agent.mts';
 import type { EslintAgent } from '../agents/eslint-agent.mts';
 import { QaAgent } from '../agents/qa-agent.mts';
+import { scaffoldProject } from './scaffold-project.mts';
 import type { DocumentationAgent } from '../agents/documentation-agent.mts';
 
 const cachedTaskGraphSchema = z.object({
@@ -335,6 +336,10 @@ export async function runPipeline(
   // Phase 2.25: Assembly — wire endpoint plugins into src/index.mts
   logger.info(`Phase 2.25: Assembly — wiring endpoint plugins into index.mts`);
   await assembleEntryFile(workspace, taskGraph, taskStates, logger);
+
+  // Phase 2.3: Project scaffolding — make output a runnable bun project
+  logger.info(`Phase 2.3: Project scaffolding`);
+  await scaffoldProject(workspace, taskGraph, prdText, logger);
 
   // Phase 2.5: Integration Testing (post-task, per completed task)
   logger.info(`Phase 2.5: Integration testing for completed tasks`);
