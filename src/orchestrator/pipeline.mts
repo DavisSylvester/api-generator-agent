@@ -10,7 +10,7 @@ import { writeJson, readJson, readAllCodeFiles } from '../io/file-protocol.mts';
 import { access, readFile, writeFile, mkdir } from 'node:fs/promises';
 import type { CodeFile } from '../agents/codegen-agent.mts';
 import { z } from 'zod';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import { validateGraph } from '../graph/task-graph.mts';
 import { executeGraph } from '../graph/parallel-executor.mts';
 import { runFixLoop } from './fix-loop.mts';
@@ -443,61 +443,63 @@ export async function runPipeline(
   }
   } // end skipDocs guard
 
-  // Phase 4: Generate architecture diagrams via diagram-agent
+  // Phase 4: Generate architecture diagrams via diagram-generator-agent
   if (config.skipDiagrams) {
     logger.info(`Phase 4: Diagrams — skipped (--no-diagrams)`);
   } else {
-  logger.info(`Phase 4: Generating architecture diagrams`);
-  try {
-    // Build a system description from the PRD + task results for the diagram agent
-    const diagramInput = [
-      `# System Architecture Description`,
-      ``,
-      `## PRD Summary`,
-      prdText.substring(0, 3000),
-      ``,
-      `## Generated Components`,
-      ...taskGraph.tasks.map((t) => `- **${t.name}** (${t.type}): ${t.description.substring(0, 100)}`),
-      ``,
-      `## Task Dependencies`,
-      ...taskGraph.tasks.filter((t) => t.dependsOn.length > 0).map((t) => `- ${t.id} depends on: ${t.dependsOn.join(`, `)}`),
-      ``,
-      `## Technology Stack`,
-      `- Runtime: BunJS`,
-      `- Framework: Elysia`,
-      `- Database: MongoDB (Docker)`,
-      `- Auth: JWT via jose + Elysia .resolve() pattern`,
-      `- Validation: TypeBox`,
-      `- Testing: bun:test against real MongoDB`,
-    ].join(`\n`);
+    logger.info(`Phase 4: Generating architecture diagrams`);
+    try {
+      // Build a system description from the PRD + task results for the diagram agent
+      const diagramInput = [
+        `# System Architecture Description`,
+        ``,
+        `## PRD Summary`,
+        prdText.substring(0, 3000),
+        ``,
+        `## Generated Components`,
+        ...taskGraph.tasks.map((t) => `- **${t.name}** (${t.type}): ${t.description.substring(0, 100)}`),
+        ``,
+        `## Task Dependencies`,
+        ...taskGraph.tasks.filter((t) => t.dependsOn.length > 0).map((t) => `- ${t.id} depends on: ${t.dependsOn.join(`, `)}`),
+        ``,
+        `## Technology Stack`,
+        `- Runtime: BunJS`,
+        `- Framework: Elysia`,
+        `- Database: MongoDB (Docker)`,
+        `- Auth: JWT via jose + Elysia .resolve() pattern`,
+        `- Validation: TypeBox`,
+        `- Testing: bun:test against real MongoDB`,
+      ].join(`\n`);
 
-    const diagramDescPath = `${workspace.root}/diagram-input.md`;
-    const diagramOutputDir = `${workspace.outputDir()}/graphs`;
-    await writeFile(diagramDescPath, diagramInput, `utf-8`);
+      const diagramDescPath = `${workspace.root}/diagram-input.md`;
+      await writeFile(diagramDescPath, diagramInput, `utf-8`);
 
-    const DIAGRAM_AGENT_PATH = `C:/projects/davis/agents/diagram-agent/src/index.mts`;
-    const diagramProc = Bun.spawn([`bun`, `run`, DIAGRAM_AGENT_PATH, diagramDescPath, diagramOutputDir], {
-      stdout: `pipe`,
-      stderr: `pipe`,
-      env: { ...Bun.env },
-      cwd: `C:/projects/davis/agents/diagram-agent`,
-    });
+      // Ensure diagram-generator-agent is available locally
+      const agentDir = await ensureDiagramAgent(config.workspaceDir, logger);
 
-    const [diagramStdout, diagramStderr] = await Promise.all([
-      new Response(diagramProc.stdout).text(),
-      new Response(diagramProc.stderr).text(),
-    ]);
-    const diagramExit = await diagramProc.exited;
+      // Run the diagram agent with --prd pointing at our generated description
+      const diagramProc = Bun.spawn([`bun`, `run`, `src/index.mts`, `--prd`, diagramDescPath], {
+        stdout: `pipe`,
+        stderr: `pipe`,
+        env: { ...Bun.env, WORKSPACE_DIR: `${workspace.outputDir()}/graphs` },
+        cwd: agentDir,
+      });
 
-    if (diagramExit === 0) {
-      logger.info(`[pipeline] Architecture diagrams generated at ${diagramOutputDir}`);
-    } else {
-      logger.warn(`[pipeline] Diagram generation failed (exit ${diagramExit}): ${diagramStderr.substring(0, 500)}`);
+      const [, diagramStderr] = await Promise.all([
+        new Response(diagramProc.stdout).text(),
+        new Response(diagramProc.stderr).text(),
+      ]);
+      const diagramExit = await diagramProc.exited;
+
+      if (diagramExit === 0) {
+        logger.info(`[pipeline] Architecture diagrams generated at ${workspace.outputDir()}/graphs`);
+      } else {
+        logger.warn(`[pipeline] Diagram generation failed (exit ${diagramExit}): ${diagramStderr.substring(0, 500)}`);
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      logger.warn(`[pipeline] Diagram generation skipped: ${msg}`);
     }
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    logger.warn(`[pipeline] Diagram generation skipped: ${msg}`);
-  }
   } // end skipDiagrams guard
 
   // Phase 4.5: Output validation — install deps, start server, verify swagger renders
@@ -811,4 +813,50 @@ async function gatherAllCode(workspace: Workspace, graph: TaskGraph): Promise<st
   }
 
   return parts.length > 0 ? parts.join('\n\n') : undefined;
+}
+
+const DIAGRAM_AGENT_REPO = `https://github.com/DavisSylvester/diagram-generator-agent.git`;
+
+async function ensureDiagramAgent(baseDir: string, logger: Logger): Promise<string> {
+  const agentDir = join(baseDir, `.agents`, `diagram-generator-agent`);
+
+  try {
+    await access(join(agentDir, `package.json`));
+    logger.info(`[diagrams] Diagram agent found at ${agentDir}`);
+    return agentDir;
+  } catch {
+    // Not present — clone it
+  }
+
+  logger.info(`[diagrams] Diagram agent not found — cloning from ${DIAGRAM_AGENT_REPO}`);
+  await mkdir(dirname(agentDir), { recursive: true });
+
+  const cloneProc = Bun.spawn([`git`, `clone`, `--depth`, `1`, DIAGRAM_AGENT_REPO, agentDir], {
+    stdout: `pipe`,
+    stderr: `pipe`,
+  });
+  const cloneStderr = await new Response(cloneProc.stderr).text();
+  const cloneExit = await cloneProc.exited;
+
+  if (cloneExit !== 0) {
+    throw new Error(`Failed to clone diagram agent: ${cloneStderr.substring(0, 500)}`);
+  }
+  logger.info(`[diagrams] Cloned diagram-generator-agent`);
+
+  // Install dependencies
+  logger.info(`[diagrams] Installing dependencies...`);
+  const installProc = Bun.spawn([`bun`, `install`], {
+    cwd: agentDir,
+    stdout: `pipe`,
+    stderr: `pipe`,
+  });
+  const installStderr = await new Response(installProc.stderr).text();
+  const installExit = await installProc.exited;
+
+  if (installExit !== 0) {
+    throw new Error(`Failed to install diagram agent deps: ${installStderr.substring(0, 500)}`);
+  }
+  logger.info(`[diagrams] Dependencies installed`);
+
+  return agentDir;
 }
