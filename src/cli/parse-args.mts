@@ -18,6 +18,10 @@ export interface CliOptions {
   readonly ui?: boolean;
   /** IaC: provider name = generate (flag), false = skip (flag), undefined = prompt user */
   readonly iac?: IacProvider | false;
+  /** Copy final output to this directory after a successful run */
+  readonly output?: string;
+  /** Training mode — output stays in .workspace/, no copy to CWD */
+  readonly training: boolean;
 }
 
 const HELP_TEXT = `
@@ -43,6 +47,8 @@ Options:
       --no-ui            Skip UI generation (no prompt)
       --iac <provider>   Generate IaC after success: "cdk" or "terraform" (no prompt)
       --no-iac           Skip IaC generation (no prompt)
+  -o, --output <dir>     Output directory for the generated project (default: current dir)
+      --training         Training / dev mode — keep output in .workspace/ only
   -l, --list-runs        List all previous runs with status
   -s, --status <run-id>  Show detailed status of a specific run
   -h, --help             Show this help message
@@ -68,7 +74,7 @@ export function parseArgs(argv: readonly string[]): CliOptions {
   const args = argv.slice(2);
 
   if (args.length === 0) {
-    return { command: `help`, noDiagrams: false, noDocs: false, noValidate: false };
+    return { command: `help`, noDiagrams: false, noDocs: false, noValidate: false, training: false };
   }
 
   // Detect legacy positional mode: first arg doesn't start with -
@@ -89,6 +95,8 @@ export function parseArgs(argv: readonly string[]): CliOptions {
   let diagrams: boolean | undefined;
   let ui: boolean | undefined;
   let iac: IacProvider | false | undefined;
+  let output: string | undefined;
+  let training = false;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
@@ -97,11 +105,11 @@ export function parseArgs(argv: readonly string[]): CliOptions {
     switch (arg) {
       case `--help`:
       case `-h`:
-        return { command: `help`, noDiagrams: false, noDocs: false, noValidate: false };
+        return { command: `help`, noDiagrams: false, noDocs: false, noValidate: false, training: false };
 
       case `-l`:
       case `--list-runs`:
-        return { command: `list-runs`, noDiagrams: false, noDocs: false, noValidate: false };
+        return { command: `list-runs`, noDiagrams: false, noDocs: false, noValidate: false, training: false };
 
       case `-s`:
       case `--status`:
@@ -109,7 +117,7 @@ export function parseArgs(argv: readonly string[]): CliOptions {
           console.error(`Error: --status requires a run ID`);
           process.exit(1);
         }
-        return { command: `status`, statusRunId: next, noDiagrams: false, noDocs: false, noValidate: false };
+        return { command: `status`, statusRunId: next, noDiagrams: false, noDocs: false, noValidate: false, training: false };
 
       case `-p`:
       case `--prd`:
@@ -208,6 +216,20 @@ export function parseArgs(argv: readonly string[]): CliOptions {
         iac = false;
         break;
 
+      case `-o`:
+      case `--output`:
+        if (!next || next.startsWith(`-`)) {
+          console.error(`Error: --output requires a directory path`);
+          process.exit(1);
+        }
+        output = next;
+        i++;
+        break;
+
+      case `--training`:
+        training = true;
+        break;
+
       default:
         console.error(`Unknown option: ${arg}`);
         console.error(`Run with --help for usage information.`);
@@ -221,12 +243,12 @@ export function parseArgs(argv: readonly string[]): CliOptions {
     process.exit(1);
   }
 
-  return { command, prd, resume, iterations, maxTasks, concurrency, noDiagrams, noDocs, noValidate, diagrams, ui, iac };
+  return { command, prd, resume, iterations, maxTasks, concurrency, noDiagrams, noDocs, noValidate, diagrams, ui, iac, output, training };
 }
 
 function parseLegacy(args: readonly string[]): CliOptions {
   const prd = args[0];
   const iterations = args[1] ? parseInt(args[1], 10) : undefined;
   const maxTasks = args[2] ? parseInt(args[2], 10) : undefined;
-  return { command: `run`, prd, iterations, maxTasks, noDiagrams: false, noDocs: false, noValidate: false };
+  return { command: `run`, prd, iterations, maxTasks, noDiagrams: false, noDocs: false, noValidate: false, training: false };
 }

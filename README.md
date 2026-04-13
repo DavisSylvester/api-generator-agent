@@ -24,11 +24,11 @@ bun install
 echo 'LLM_PROVIDER=openai
 OPENAI_API_KEY=sk-...' > .env
 
-# Run a new pipeline from a sample PRD
-./run.sh --prd sample-prds/todo-api.md
+# Generate an API into ./my-api
+./run.sh --prd sample-prds/todo-api.md --output ./my-api
 
 # Windows
-run.cmd --prd sample-prds/todo-api.md
+run.cmd --prd sample-prds/todo-api.md --output ./my-api
 ```
 
 ---
@@ -69,6 +69,7 @@ Options:
   -i, --iterations <n>   Max fix loop iterations per task (default: from env or 5)
   -t, --max-tasks <n>    Max tasks to execute (default: all)
   -c, --concurrency <n>  Max parallel tasks (default: from env)
+  -o, --output <dir>     Copy generated project to this directory on success
   -d, --diagrams         Generate diagrams (no prompt)
   -D, --no-diagrams      Skip diagram generation (no prompt)
   -N, --no-docs          Skip documentation generation phase
@@ -98,17 +99,17 @@ bun run src/index.mts <prd-file> [max-iterations] [max-tasks]
 ### Start a new run
 
 ```bash
-# Basic run — prompts for diagrams, UI, and IaC interactively
-./run.sh --prd sample-prds/todo-api.md
+# Generate into ./my-api — prompts for diagrams, UI, and IaC interactively
+./run.sh --prd sample-prds/todo-api.md --output ./my-api
 
 # Skip all prompts: diagrams yes, no UI, Terraform IaC
-./run.sh --prd sample-prds/todo-api.md --diagrams --no-ui --iac terraform
+./run.sh --prd sample-prds/todo-api.md -o ./my-api --diagrams --no-ui --iac terraform
 
 # Skip all prompts: no diagrams, no UI, AWS CDK
-./run.sh --prd sample-prds/beautician-scheduling.md --no-diagrams --no-ui --iac cdk
+./run.sh --prd sample-prds/beautician-scheduling.md -o ./salon-api --no-diagrams --no-ui --iac cdk
 
-# With 20 fix iterations per task, fully non-interactive
-./run.sh --prd sample-prds/bjj-open-mat-finder.md --iterations 20 --no-diagrams --no-ui --no-iac
+# Development mode (output stays in .workspace/)
+./run.sh --prd sample-prds/todo-api.md --iterations 20 --no-diagrams --no-ui --no-iac
 
 # Limit to first 5 tasks only (useful for testing)
 ./run.sh --prd sample-prds/todo-api.md --iterations 10 --max-tasks 5

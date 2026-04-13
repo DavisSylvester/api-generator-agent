@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, cp, mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import type { Logger } from 'winston';
 import { loadEnv, preflightLlmCheck } from './config/env.mts';
@@ -138,9 +138,28 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // --- Copy output to target directory ---
+  // Default: current directory (production). With --training: stays in .workspace/ only.
+  const workspaceOutputDir = `${effectiveConfig.workspaceDir}/${result.value.runId}/output`;
+  const effectiveOutput = options.output ?? (options.training ? undefined : `.`);
+
+  if (effectiveOutput) {
+    const dest = resolve(effectiveOutput);
+    logger.info(`Copying generated project to ${dest}`);
+    try {
+      await mkdir(dest, { recursive: true });
+      await cp(workspaceOutputDir, dest, { recursive: true });
+      logger.info(`Generated project ready at ${dest}`);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      logger.error(`Failed to copy output to ${dest}: ${msg}`);
+    }
+  }
+
+  const outputDir = effectiveOutput ? resolve(effectiveOutput) : workspaceOutputDir;
+
   // --- Post-success prompts: UI and IaC ---
   // Only reached when every task passed (no failures, no hard failures).
-  const outputDir = `${effectiveConfig.workspaceDir}/${result.value.runId}/output`;
 
   // UI generation
   const wantUi = options.ui === true
