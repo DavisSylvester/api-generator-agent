@@ -15,6 +15,7 @@ import { CodegenAgent } from '../agents/codegen-agent.mts';
 import { EslintAgent } from '../agents/eslint-agent.mts';
 import { QaAgent } from '../agents/qa-agent.mts';
 import { DocumentationAgent } from '../agents/documentation-agent.mts';
+import { FlutterUiAgent } from '../agents/flutter-ui-agent.mts';
 import type { FallbackTier } from '../config/fallback-tiers.mts';
 import { Notifier } from '../notifications/notifier.mts';
 import { TelegramChannel } from '../notifications/telegram-channel.mts';
@@ -31,6 +32,7 @@ export interface Container {
   readonly eslintAgent: EslintAgent;
   readonly qaAgent: QaAgent;
   readonly documentationAgent: DocumentationAgent;
+  readonly flutterUiAgent: FlutterUiAgent;
   readonly pipelineConfig: PipelineConfig;
   readonly fallbackTiers: readonly FallbackTier[];
   readonly costTracker: CostTracker;
@@ -172,6 +174,13 @@ export function createContainer(env: EnvConfig): Container {
     timeoutMs,
   );
 
+  const flutterUiAgent = new FlutterUiAgent(
+    modelChains[`flutter-ui`],
+    codegenFactory,
+    logger,
+    timeoutMs,
+  );
+
   const costTracker = new CostTracker(logger);
   const fallbackTiers = buildFallbackTiers(env, logger);
 
@@ -210,6 +219,7 @@ export function createContainer(env: EnvConfig): Container {
     eslintAgent,
     qaAgent,
     documentationAgent,
+    flutterUiAgent,
     pipelineConfig,
     fallbackTiers,
     costTracker,

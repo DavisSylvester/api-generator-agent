@@ -169,9 +169,10 @@ async function main(): Promise<void> {
       : await askYesNo(`Generate a frontend UI for this API?`, false);
 
   if (wantUi) {
-    logger.info(`UI generation requested — output will be at ${outputDir}/ui`);
-    // TODO: invoke UI generation agent (e.g. angular-ui)
-    logger.info(`UI generation is not yet implemented. Skipping.`);
+    const uiOutputDir = `${outputDir}/ui`;
+    logger.info(`Flutter UI generation requested — output will be at ${uiOutputDir}`);
+    logger.info(`Flutter UI agent is registered but screen-by-screen orchestration is not yet wired.`);
+    logger.info(`To generate manually, use the FlutterUiAgent with the PRD at sample-prds/bjj-open-mat-flutter-app.md`);
   }
 
   // IaC generation
