@@ -28,6 +28,7 @@ import type { CodegenAgent } from '../agents/codegen-agent.mts';
 import type { EslintAgent } from '../agents/eslint-agent.mts';
 import { QaAgent } from '../agents/qa-agent.mts';
 import { scaffoldProject } from './scaffold-project.mts';
+import { generateDevcontainer } from './generate-devcontainer.mts';
 import { validateOutput } from './validate-output.mts';
 import type { DocumentationAgent } from '../agents/documentation-agent.mts';
 import { FeaturesStore } from '../state/features-store.mts';
@@ -360,6 +361,15 @@ export async function runPipeline(
   // Phase 2.3: Project scaffolding — make output a runnable bun project
   logger.info(`Phase 2.3: Project scaffolding`);
   await scaffoldProject(workspace, taskGraph, prdText, logger);
+
+  // Phase 2.35: DevContainer setup — generate .devcontainer/ config for zero-setup dev
+  logger.info(`Phase 2.35: DevContainer setup`);
+  try {
+    await generateDevcontainer(workspace, logger);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    logger.warn(`[devcontainer] DevContainer generation failed: ${msg}`);
+  }
 
   // Phase 2.5: Integration Testing (post-task, per completed task)
   logger.info(`Phase 2.5: Integration testing for completed tasks`);

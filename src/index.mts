@@ -1,10 +1,12 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import type { Logger } from 'winston';
-import { loadEnv } from './config/env.mts';
+import { loadEnv, preflightLlmCheck } from './config/env.mts';
 import { createContainer } from './container/di.mts';
 import { runPipeline } from './orchestrator/pipeline.mts';
 import { parseArgs, printHelp } from './cli/parse-args.mts';
+import { askYesNo, askChoice } from './cli/prompt.mts';
+import type { IacProvider } from './cli/parse-args.mts';
 import { listRuns } from './cli/list-runs.mts';
 import { showStatus } from './cli/show-status.mts';
 
@@ -28,6 +30,9 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
+  // Preflight: verify the LLM provider is reachable before doing any real work
+  await preflightLlmCheck(env);
+
   // Command is `run` — need either --prd or --resume
   const container = createContainer(env);
   const { logger, pipelineConfig } = container;
@@ -48,8 +53,14 @@ async function main(): Promise<void> {
     effectiveConfig = { ...effectiveConfig, maxConcurrency: options.concurrency };
   }
 
-  if (options.noDiagrams) {
+  // Diagrams: flag takes precedence, otherwise prompt
+  if (options.diagrams === false) {
     effectiveConfig = { ...effectiveConfig, skipDiagrams: true };
+  } else if (options.diagrams === true) {
+    effectiveConfig = { ...effectiveConfig, skipDiagrams: false };
+  } else {
+    const wantDiagrams = await askYesNo(`Generate architecture diagrams?`, true);
+    effectiveConfig = { ...effectiveConfig, skipDiagrams: !wantDiagrams };
   }
 
   if (options.noDocs) {
@@ -125,6 +136,49 @@ async function main(): Promise<void> {
   const failed = result.value.taskStates.filter((s) => s.status === "failed").length;
   if (failed > 0) {
     process.exit(1);
+  }
+
+  // --- Post-success prompts: UI and IaC ---
+  // Only reached when every task passed (no failures, no hard failures).
+  const outputDir = `${effectiveConfig.workspaceDir}/${result.value.runId}/output`;
+
+  // UI generation
+  const wantUi = options.ui === true
+    ? true
+    : options.ui === false
+      ? false
+      : await askYesNo(`Generate a frontend UI for this API?`, false);
+
+  if (wantUi) {
+    logger.info(`UI generation requested — output will be at ${outputDir}/ui`);
+    // TODO: invoke UI generation agent (e.g. angular-ui)
+    logger.info(`UI generation is not yet implemented. Skipping.`);
+  }
+
+  // IaC generation
+  let iacProvider: IacProvider | undefined;
+
+  if (typeof options.iac === `string`) {
+    // Flag specified a provider directly
+    iacProvider = options.iac;
+  } else if (options.iac === false) {
+    // Explicitly skipped
+    iacProvider = undefined;
+  } else {
+    // Prompt the user to pick a provider or skip
+    iacProvider = await askChoice<IacProvider>(
+      `Generate infrastructure-as-code (IaC) for deployment?`,
+      [
+        { label: `AWS CDK`, value: `cdk` },
+        { label: `Terraform`, value: `terraform` },
+      ],
+    );
+  }
+
+  if (iacProvider) {
+    logger.info(`IaC generation requested (${iacProvider}) — output will be at ${outputDir}/infra`);
+    // TODO: invoke IaC generation for the selected provider
+    logger.info(`IaC generation (${iacProvider}) is not yet implemented. Skipping.`);
   }
 }
 

@@ -64,7 +64,8 @@ Both entry points delegate to the shared orchestrator.
 
 | Module | File | Purpose |
 |--------|------|---------|
-| Arg Parser | `src/cli/arg-parser.mts` | Zero-dependency CLI argument parser |
+| Arg Parser | `src/cli/parse-args.mts` | CLI argument parser with flag and legacy positional support |
+| Prompt | `src/cli/prompt.mts` | Interactive yes/no and choice prompts for human-in-the-loop |
 | Run Orchestrator | `src/cli/run-orchestrator.mts` | Shared logic for parsing input, planning, status, and resume |
 
 ### Input Layer (`src/input/`)
@@ -87,9 +88,12 @@ Both entry points delegate to the shared orchestrator.
 
 | Module | File | Purpose |
 |--------|------|---------|
-| Pipeline | `pipeline.mts` | Main pipeline: plan -> execute -> assembly -> integration tests -> docs |
+| Pipeline | `pipeline.mts` | Main pipeline: plan -> execute -> assembly -> scaffold -> devcontainer -> tests -> docs -> validate |
 | Fix Loop | `fix-loop.mts` | Code generation + LLM-driven fix loop per task |
 | Fallback Fix Loop | `fallback-fix-loop.mts` | Multi-tier LLM fallback (Ollama -> OpenAI -> Claude) |
+| Scaffold Project | `scaffold-project.mts` | Generates package.json, tsconfig, .gitignore, README for output |
+| DevContainer | `generate-devcontainer.mts` | Generates .devcontainer/ with Docker Compose, Dockerfile, .env |
+| Validate Output | `validate-output.mts` | Installs deps, starts server, Playwright Swagger screenshot |
 
 ### Generation Engine (`src/generation/`)
 
@@ -199,9 +203,13 @@ User Input (PRD or prompt)
   |     +-> [features-store] Update status per feature
   |
   +-> [assembly] Wire endpoint plugins into entry file
+  +-> [scaffold-project] Generate package.json, tsconfig, README
+  +-> [generate-devcontainer] Generate .devcontainer/, .env
   +-> [qa-agent] Integration tests against Docker MongoDB
   +-> [documentation-agent] Generate API docs
+  +-> [validate-output] Install deps, start server, Playwright screenshot
   +-> [session-store] Write handoff document
+  +-> [post-success] Optional UI and IaC generation (AWS CDK / Terraform)
 ```
 
 ### Resume Command Flow

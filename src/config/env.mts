@@ -54,3 +54,45 @@ export function loadEnv(): EnvConfig {
   }
   return result.data;
 }
+
+/**
+ * Verify the selected LLM provider is actually reachable before starting the pipeline.
+ * - ollama: ping the /api/version endpoint
+ * - openai / anthropic: key presence is already enforced by the schema
+ */
+export async function preflightLlmCheck(env: EnvConfig): Promise<void> {
+  if (env.LLM_PROVIDER === `ollama`) {
+    const url = `${env.OLLAMA_HOST}/api/version`;
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(5_000) });
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      const lines = [
+        ``,
+        `ERROR: Cannot reach Ollama at ${env.OLLAMA_HOST} (${msg})`,
+        ``,
+        `The pipeline requires a working LLM provider. Configure one of:`,
+        ``,
+        `  1. Local Ollama  — install from https://ollama.com, run "ollama serve",`,
+        `                     then pull the required models:`,
+        `                       ollama pull qwen3.5:27b`,
+        `                       ollama pull qwen3-coder-next`,
+        ``,
+        `  2. OpenAI        — set in .env:`,
+        `                       LLM_PROVIDER=openai`,
+        `                       OPENAI_API_KEY=sk-...`,
+        ``,
+        `  3. Anthropic     — set in .env:`,
+        `                       LLM_PROVIDER=anthropic`,
+        `                       ANTHROPIC_API_KEY=sk-ant-...`,
+        ``,
+      ];
+      throw new Error(lines.join(`\n`));
+    }
+  }
+  // openai / anthropic key checks are handled by the Zod schema — if we get
+  // here the key exists.  A bad key will surface on the first LLM call.
+}

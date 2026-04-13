@@ -6,7 +6,13 @@ Autonomous pipeline that takes a PRD (Product Requirements Document) and generat
 
 - [Bun](https://bun.sh/) v1.1+
 - [Docker](https://www.docker.com/) (for MongoDB test containers)
-- API keys configured in `.env` (see [Environment Variables](#environment-variables))
+- [Node.js](https://nodejs.org/) (for Playwright validation step)
+- An LLM provider — at least one of:
+  - **Ollama** (local, free) — install from [ollama.com](https://ollama.com), run `ollama serve`
+  - **OpenAI** — set `OPENAI_API_KEY` in `.env`
+  - **Anthropic** — set `ANTHROPIC_API_KEY` in `.env`
+
+The pipeline verifies your LLM provider is reachable at startup and exits with a clear error if not.
 
 ## Quick Start
 
@@ -14,11 +20,36 @@ Autonomous pipeline that takes a PRD (Product Requirements Document) and generat
 # Install dependencies
 bun install
 
-# Run a new pipeline from a PRD
-./run.sh --prd my-app-prd.md --iterations 20
+# Configure your LLM provider (pick one)
+echo 'LLM_PROVIDER=openai
+OPENAI_API_KEY=sk-...' > .env
+
+# Run a new pipeline from a sample PRD
+./run.sh --prd sample-prds/todo-api.md
 
 # Windows
-run.cmd --prd my-app-prd.md --iterations 20
+run.cmd --prd sample-prds/todo-api.md
+```
+
+---
+
+## Sample PRDs
+
+The [`sample-prds/`](sample-prds/) directory contains example PRDs you can use to test the pipeline:
+
+| PRD | Complexity | Description |
+|-----|------------|-------------|
+| [Todo API](sample-prds/todo-api.md) | Simple | CRUD todos with user auth and pagination. Good starting point. |
+| [Bookmark Manager](sample-prds/bookmark-manager.md) | Medium | Bookmarks with nested folders, tags, and search. |
+| [Beautician Scheduling](sample-prds/beautician-scheduling.md) | Medium | Multi-tenant appointment scheduling with availability slots, grace periods, and discount codes. |
+| [BJJ Open Mat Finder](sample-prds/bjj-open-mat-finder.md) | Complex | Geospatial gym search, Auth0 integration, Google Places validation, check-ins, and reviews. |
+
+```bash
+# Try the simplest one first
+./run.sh --prd sample-prds/todo-api.md
+
+# Or go big
+./run.sh --prd sample-prds/bjj-open-mat-finder.md --iterations 20
 ```
 
 ---
@@ -38,11 +69,20 @@ Options:
   -i, --iterations <n>   Max fix loop iterations per task (default: from env or 5)
   -t, --max-tasks <n>    Max tasks to execute (default: all)
   -c, --concurrency <n>  Max parallel tasks (default: from env)
-  -D, --no-diagrams      Skip diagram generation phase
+  -d, --diagrams         Generate diagrams (no prompt)
+  -D, --no-diagrams      Skip diagram generation (no prompt)
   -N, --no-docs          Skip documentation generation phase
+  -V, --no-validate      Skip output validation (bun install, swagger screenshot)
+      --ui               Generate UI after successful run (no prompt)
+      --no-ui            Skip UI generation (no prompt)
+      --iac <provider>   Generate IaC after success: "cdk" or "terraform" (no prompt)
+      --no-iac           Skip IaC generation (no prompt)
   -l, --list-runs        List all previous runs with status
   -s, --status <run-id>  Show detailed status of a specific run
   -h, --help             Show help message
+
+When --diagrams/--no-diagrams, --ui/--no-ui, or --iac/--no-iac are omitted
+the pipeline will prompt you interactively.
 ```
 
 Legacy positional args are still supported for backward compatibility:
@@ -58,14 +98,20 @@ bun run src/index.mts <prd-file> [max-iterations] [max-tasks]
 ### Start a new run
 
 ```bash
-# Basic run with default settings
-./run.sh --prd my-app-prd.md
+# Basic run — prompts for diagrams, UI, and IaC interactively
+./run.sh --prd sample-prds/todo-api.md
 
-# With 20 fix iterations per task, skip diagram generation
-./run.sh --prd my-app-prd.md --iterations 20 --no-diagrams
+# Skip all prompts: diagrams yes, no UI, Terraform IaC
+./run.sh --prd sample-prds/todo-api.md --diagrams --no-ui --iac terraform
+
+# Skip all prompts: no diagrams, no UI, AWS CDK
+./run.sh --prd sample-prds/beautician-scheduling.md --no-diagrams --no-ui --iac cdk
+
+# With 20 fix iterations per task, fully non-interactive
+./run.sh --prd sample-prds/bjj-open-mat-finder.md --iterations 20 --no-diagrams --no-ui --no-iac
 
 # Limit to first 5 tasks only (useful for testing)
-./run.sh --prd my-app-prd.md --iterations 10 --max-tasks 5
+./run.sh --prd sample-prds/todo-api.md --iterations 10 --max-tasks 5
 ```
 
 ### Check run status
@@ -201,8 +247,15 @@ run-diagrams.cmd input-description.md output-dir\
 
 1. **Planning** -- LLM decomposes the PRD into a DAG of tasks (models, repos, services, middleware, endpoints)
 2. **Execution** -- Each task runs through a fix loop: CodeGen -> ESLint -> QA (real tests against MongoDB Docker)
-3. **Documentation** -- Generates API documentation from completed code
-4. **Diagrams** -- Generates architecture diagrams via the diagram-agent
+3. **Assembly** -- Wires endpoint plugins into the main `index.mts` entry file
+4. **Scaffolding** -- Generates `package.json`, `tsconfig.json`, `.gitignore`, `README.md`
+5. **DevContainer** -- Generates `.devcontainer/` with Docker Compose, Dockerfile, and working `.env` defaults
+6. **Integration Testing** -- Runs integration tests for completed tasks
+7. **Documentation** -- Generates API documentation from completed code
+8. **Diagrams** -- Generates architecture diagrams (interactive prompt or `--diagrams`/`--no-diagrams`)
+9. **Validation** -- Installs deps, starts the server, screenshots Swagger UI via Playwright
+10. **Report** -- Generates a run report with token usage and cost summary
+11. **Post-success prompts** -- If all tasks passed, optionally generate a frontend UI or IaC (AWS CDK / Terraform)
 
 ## Multi-Tier LLM Fallback
 
@@ -233,43 +286,81 @@ All output is written to `.workspace/<run-id>/`:
 
 ```
 .workspace/<run-id>/
-  config.json              # Run configuration
-  plan.json                # Task graph
-  execution-summary.json   # Final counts
-  token-usage.json         # LLM token tracking
-  pipeline-result.json     # Final result metadata
-  logs/run.log             # Full structured log (JSON)
-  output/                  # Generated API code
+  config.json                # Run configuration
+  plan.json                  # Task graph
+  execution-summary.json     # Final counts
+  token-usage.json           # LLM token tracking
+  pipeline-result.json       # Final result metadata
+  report.md                  # Human-readable run report
+  SESSION-HANDOFF.md         # Session handoff document
+  logs/run.log               # Full structured log (JSON)
+  output/                    # Generated API project (runnable)
     src/
-      types/
-      repositories/
-      services/
-      routes/
-      middleware/
-      index.mts
-    graphs/                # Architecture diagrams
+      index.mts              # Assembled entry point with all routes
+      env.mts                # TypeBox-validated environment config
+      ioc/                   # DI container
+      features/              # Feature-based domain folders
+      api/                   # Routes and plugins
+    .devcontainer/           # Zero-setup dev environment
+      devcontainer.json
+      docker-compose.yml
+      Dockerfile
+    package.json
+    tsconfig.json
+    .env                     # Working defaults for devcontainer
+    .env.example             # Documented env var template
+    .gitignore
+    README.md
+    graphs/                  # Architecture diagrams (if generated)
+  docs/
+    assembled-index.mts      # Copy of final wired entry file
+    hoppscotch-collection.json
   tasks/<task-id>/
-    code/                  # Final code for this task
-    tests/                 # Test files
-    status.json            # Task completion state (used by --resume)
-    iterations/            # Per-iteration snapshots
+    code/                    # Final code for this task
+    tests/                   # Test files
+    status.json              # Task completion state (used by --resume)
+    iterations/              # Per-iteration snapshots
 ```
 
 ---
 
 ## Environment Variables
 
+### LLM Provider (at least one required)
+
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `OLLAMA_HOST` | Local Ollama server URL | `http://192.168.128.230:11434` |
-| `OLLAMA_API_KEY` | Ollama Cloud API key (for codegen) | -- |
-| `ANTHROPIC_API_KEY` | Anthropic API key (Tier 3 fallback) | -- |
-| `OPENAI_API_KEY` | OpenAI API key (Tier 2 fallback) | -- |
-| `MAX_FIX_ITERATIONS` | Default max iterations per task | `5` |
-| `MAX_CONCURRENCY` | Default parallel task limit | `4` |
+| `LLM_PROVIDER` | Which provider to use: `ollama`, `openai`, or `anthropic` | `ollama` |
+| `OLLAMA_HOST` | Ollama server URL | `http://localhost:11434` |
+| `OLLAMA_API_KEY` | Ollama Cloud API key (optional, for cloud codegen) | -- |
+| `OPENAI_API_KEY` | OpenAI API key (required when `LLM_PROVIDER=openai`) | -- |
+| `ANTHROPIC_API_KEY` | Anthropic API key (required when `LLM_PROVIDER=anthropic`) | -- |
+
+If additional provider keys are set beyond the primary, they enable automatic [fallback escalation](#multi-tier-llm-fallback).
+
+### Pipeline Tuning
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `MAX_FIX_ITERATIONS` | Max fix loop iterations per task | `5` |
+| `MAX_CONCURRENCY` | Max parallel task execution | `4` |
 | `LLM_TIMEOUT_MS` | LLM call timeout | `1800000` (30 min) |
+| `TASK_COST_LIMIT` | Per-task LLM cost ceiling (USD) | `3.00` |
 | `WORKSPACE_DIR` | Output directory | `.workspace` |
 | `INTEGRATION_PORT` | Base port for integration tests | `4100` |
-| `TELEGRAM_BOT_TOKEN` | Telegram bot token for notifications | -- |
-| `TELEGRAM_CHAT_ID` | Telegram chat ID for notifications | -- |
+
+### Notifications (optional)
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `TELEGRAM_BOT_TOKEN` | Telegram bot token for progress updates | -- |
+| `TELEGRAM_CHAT_ID` | Telegram chat ID for progress updates | -- |
 | `NOTIFICATION_INTERVAL_MS` | Status update interval | `300000` (5 min) |
+
+### Observability (optional)
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `LANGSMITH_TRACING` | Enable LangSmith tracing | `true` |
+| `LANGSMITH_API_KEY` | LangSmith API key (tracing disabled if empty) | -- |
+| `LANGSMITH_PROJECT` | LangSmith project name | `api-generator-agent` |

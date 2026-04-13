@@ -15,8 +15,11 @@ bun install
 ### Prerequisites
 
 - [Bun](https://bun.sh) v1.3+
-- [Docker](https://www.docker.com/) (for integration tests)
-- An LLM provider (Ollama, OpenAI, or Anthropic)
+- [Docker](https://www.docker.com/) (for MongoDB test containers)
+- [Node.js](https://nodejs.org/) (for Playwright validation step)
+- An LLM provider — Ollama (local), OpenAI, or Anthropic (see [Getting Started](docs/getting-started.md))
+
+The pipeline verifies your LLM provider is reachable at startup and exits with a clear error if none is configured.
 
 ### Type Checking
 
@@ -27,7 +30,11 @@ bunx tsc --noEmit
 ### Running
 
 ```bash
-bun run src/index.mts sample-prd.md
+# Interactive mode (prompts for diagrams, UI, IaC)
+bun run src/index.mts --prd sample-prds/todo-api.md
+
+# Fully non-interactive
+bun run src/index.mts --prd sample-prds/todo-api.md --no-diagrams --no-ui --no-iac
 ```
 
 ## Code Standards

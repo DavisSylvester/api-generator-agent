@@ -1,3 +1,6 @@
+export const IAC_PROVIDERS = [`cdk`, `terraform`] as const;
+export type IacProvider = (typeof IAC_PROVIDERS)[number];
+
 export interface CliOptions {
   readonly command: `run` | `list-runs` | `status` | `help`;
   readonly prd?: string;
@@ -9,6 +12,12 @@ export interface CliOptions {
   readonly noDiagrams: boolean;
   readonly noDocs: boolean;
   readonly noValidate: boolean;
+  /** Tri-state: true = generate (flag), false = skip (flag), undefined = prompt user */
+  readonly diagrams?: boolean;
+  /** Tri-state: true = generate UI after success (flag), false = skip (flag), undefined = prompt */
+  readonly ui?: boolean;
+  /** IaC: provider name = generate (flag), false = skip (flag), undefined = prompt user */
+  readonly iac?: IacProvider | false;
 }
 
 const HELP_TEXT = `
@@ -26,12 +35,20 @@ Options:
   -i, --iterations <n>   Max fix loop iterations per task (default: from env or 5)
   -t, --max-tasks <n>    Max tasks to execute (default: all)
   -c, --concurrency <n>  Max parallel tasks (default: from env)
-  -D, --no-diagrams      Skip diagram generation phase
+  -D, --no-diagrams      Skip diagram generation (no prompt)
+  -d, --diagrams         Generate diagrams (no prompt)
   -N, --no-docs          Skip documentation generation phase
   -V, --no-validate      Skip output validation (bun install, swagger screenshot)
+      --ui               Generate UI after successful run (no prompt)
+      --no-ui            Skip UI generation (no prompt)
+      --iac <provider>   Generate IaC after success: "cdk" or "terraform" (no prompt)
+      --no-iac           Skip IaC generation (no prompt)
   -l, --list-runs        List all previous runs with status
   -s, --status <run-id>  Show detailed status of a specific run
   -h, --help             Show this help message
+
+  When --diagrams/--no-diagrams, --ui/--no-ui, or --iac/--no-iac are omitted
+  the pipeline will prompt you interactively before each phase.
 
 Examples:
   bun run src/index.mts --prd my-app.md --iterations 20
@@ -69,6 +86,9 @@ export function parseArgs(argv: readonly string[]): CliOptions {
   let noDiagrams = false;
   let noDocs = false;
   let noValidate = false;
+  let diagrams: boolean | undefined;
+  let ui: boolean | undefined;
+  let iac: IacProvider | false | undefined;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
@@ -141,8 +161,15 @@ export function parseArgs(argv: readonly string[]): CliOptions {
         i++;
         break;
 
+      case `-d`:
+      case `--diagrams`:
+        diagrams = true;
+        noDiagrams = false;
+        break;
+
       case `-D`:
       case `--no-diagrams`:
+        diagrams = false;
         noDiagrams = true;
         break;
 
@@ -154,6 +181,31 @@ export function parseArgs(argv: readonly string[]): CliOptions {
       case `-V`:
       case `--no-validate`:
         noValidate = true;
+        break;
+
+      case `--ui`:
+        ui = true;
+        break;
+
+      case `--no-ui`:
+        ui = false;
+        break;
+
+      case `--iac`:
+        if (!next || next.startsWith(`-`)) {
+          console.error(`Error: --iac requires a provider: "cdk" or "terraform"`);
+          process.exit(1);
+        }
+        if (!IAC_PROVIDERS.includes(next as IacProvider)) {
+          console.error(`Error: --iac must be "cdk" or "terraform" (got "${next}")`);
+          process.exit(1);
+        }
+        iac = next as IacProvider;
+        i++;
+        break;
+
+      case `--no-iac`:
+        iac = false;
         break;
 
       default:
@@ -169,7 +221,7 @@ export function parseArgs(argv: readonly string[]): CliOptions {
     process.exit(1);
   }
 
-  return { command, prd, resume, iterations, maxTasks, concurrency, noDiagrams, noDocs, noValidate };
+  return { command, prd, resume, iterations, maxTasks, concurrency, noDiagrams, noDocs, noValidate, diagrams, ui, iac };
 }
 
 function parseLegacy(args: readonly string[]): CliOptions {

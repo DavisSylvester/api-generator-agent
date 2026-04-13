@@ -80,7 +80,16 @@ Create a markdown file that describes your API. The planning agent needs four th
 3. **Endpoints** - HTTP method, path, and what it does
 4. **Business Rules** - validation, access control, domain logic
 
-A sample PRD is included at `examples/bookmark-api-prd.md`. Here is a stripped-down version to illustrate the minimum viable PRD:
+Sample PRDs are included in [`sample-prds/`](../sample-prds/):
+
+| PRD | Complexity | Description |
+|-----|------------|-------------|
+| [`todo-api.md`](../sample-prds/todo-api.md) | Simple | CRUD todos with auth and pagination |
+| [`bookmark-manager.md`](../sample-prds/bookmark-manager.md) | Medium | Bookmarks with nested folders, tags, and search |
+| [`beautician-scheduling.md`](../sample-prds/beautician-scheduling.md) | Medium | Multi-tenant appointment scheduling |
+| [`bjj-open-mat-finder.md`](../sample-prds/bjj-open-mat-finder.md) | Complex | Geospatial search, Auth0, Google Places |
+
+Here is a stripped-down version to illustrate the minimum viable PRD:
 
 ```markdown
 # Notes API
@@ -129,18 +138,18 @@ Save this as `my-notes-prd.md` in the project root.
 
 ## Step 5: Run the Agent
 
-The agent accepts a file path, raw text, or piped stdin:
-
 ```bash
-# From a file
-bun run src/index.mts my-notes-prd.md
+# Interactive — prompts for diagrams, UI, and IaC
+bun run src/index.mts --prd my-notes-prd.md
 
-# Raw text (for quick prototyping)
-bun run src/index.mts "Build a notes API with user auth, CRUD on notes, and pagination"
+# Fully non-interactive (good for CI or background runs)
+bun run src/index.mts --prd my-notes-prd.md --no-diagrams --no-ui --no-iac
 
-# Piped from stdin
-cat my-notes-prd.md | bun run src/index.mts -
+# Or try a sample PRD
+bun run src/index.mts --prd sample-prds/todo-api.md
 ```
+
+The pipeline verifies your LLM provider is reachable before doing any work. If Ollama isn't running or your API key is missing, you'll get a clear error with setup instructions.
 
 This kicks off the full pipeline. You will see log output for each phase:
 
@@ -185,13 +194,26 @@ If a test fails, the agent retries with error context:
 [info]   [executor] Completed: endpoint-auth (3 iterations)
 ```
 
-Finally, the assembly and documentation phases run:
+Finally, the assembly, scaffolding, devcontainer, and documentation phases run:
 
 ```
 [info] Phase 2.25: Assembly - wiring endpoint plugins into index.mts
 [info]   [assembly] Found plugin: authRoutes in src/routes/auth.mts
 [info]   [assembly] Found plugin: noteRoutes in src/routes/notes.mts
 [info]   [assembly] Assembled index.mts with 2 plugin(s)
+
+[info] Phase 2.3: Project scaffolding
+[info]   [scaffold] Wrote package.json
+[info]   [scaffold] Wrote tsconfig.json
+[info]   [scaffold] Wrote .env.example
+[info]   [scaffold] Wrote README.md
+
+[info] Phase 2.35: DevContainer setup
+[info]   [devcontainer] Detected stack: bun@1.3.12, db=mongodb, port=3000
+[info]   [devcontainer] Wrote devcontainer.json
+[info]   [devcontainer] Wrote docker-compose.yml
+[info]   [devcontainer] Wrote Dockerfile
+[info]   [devcontainer] Wrote .env
 
 [info] Phase 3: Generating documentation
 [info] Documentation generated successfully
@@ -232,25 +254,35 @@ The `docs/assembled-index.mts` file is the runnable Elysia app. It imports all g
 
 ## Step 7: Run the Generated API
 
-Copy the generated code into a new project and start it:
+The generated project at `.workspace/<run-id>/output/` is ready to run:
 
 ```bash
-# Create a new directory for the generated API
-mkdir my-notes-api && cd my-notes-api
-bun init -y
+cd .workspace/<run-id>/output
 
-# Copy all task code into the project
-# Each task's code is in .workspace/<run-id>/tasks/<task-id>/code/
-# The assembled index is at .workspace/<run-id>/docs/assembled-index.mts
+# Install dependencies
+bun install
 
-# Install the dependencies the generated code needs
-bun add elysia @sinclair/typebox mongodb jose
-
-# Start MongoDB
+# Start MongoDB (or use the devcontainer — see below)
 docker run -d --name notes-mongo -p 27017:27017 mongo:latest
 
-# Set the connection string and run
-MONGODB_URI=mongodb://localhost:27017/notes-api bun run src/index.mts
+# Run the server
+bun run dev
+```
+
+### Using the DevContainer (zero-setup)
+
+The generated project includes a `.devcontainer/` directory. Open it in VS Code with the Dev Containers extension and everything starts automatically — MongoDB, env vars, and dependencies:
+
+```bash
+# Or start manually with Docker Compose
+cd .workspace/<run-id>/output/.devcontainer
+docker compose up -d
+```
+
+Default credentials are `admin:admin`, overridable via environment:
+
+```bash
+MONGO_USER=myuser MONGO_PASS=mypass docker compose up -d
 ```
 
 The API will be available at `http://localhost:3000`. Test it:
@@ -336,14 +368,17 @@ rm -rf .workspace/.plan-cache/
 
 ## Example PRDs
 
+See [`sample-prds/`](../sample-prds/) for ready-to-use examples:
+
 | PRD | Complexity | Entities | Endpoints | Description |
 |---|---|---|---|---|
-| `examples/bookmark-api-prd.md` | Medium | 3 (User, Folder, Bookmark) | 14 | Bookmark manager with folders, tags, and search |
-| `sample-prd.md` | Simple | 2 (User, Todo) | 9 | Classic todo app with priorities and pagination |
-| `beautician-scheduling-prd.md` | Complex | 6 (Tenant, Customer, Service, Availability, Appointment, DiscountCode) | 20+ | Multi-tenant appointment scheduling with grace periods and discount codes |
+| [`todo-api.md`](../sample-prds/todo-api.md) | Simple | 2 (User, Todo) | 9 | Classic todo app with priorities and pagination |
+| [`bookmark-manager.md`](../sample-prds/bookmark-manager.md) | Medium | 3 (User, Folder, Bookmark) | 14 | Bookmark manager with folders, tags, and search |
+| [`beautician-scheduling.md`](../sample-prds/beautician-scheduling.md) | Complex | 6 (Tenant, Customer, Service, etc.) | 20+ | Multi-tenant appointment scheduling |
+| [`bjj-open-mat-finder.md`](../sample-prds/bjj-open-mat-finder.md) | Complex | 5 (User, Gym, OpenMat, CheckIn, Favorite) | 25+ | Geospatial search, Auth0, Google Places |
 
-Start with the bookmark API PRD if this is your first time:
+Start with the todo API if this is your first time:
 
 ```bash
-bun run src/index.mts examples/bookmark-api-prd.md
+bun run src/index.mts --prd sample-prds/todo-api.md
 ```

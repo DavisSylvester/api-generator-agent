@@ -28,145 +28,108 @@ bun install
 
 ## CLI Commands
 
-### generate
-
-Generate a new API project from a PRD file or natural language prompt.
+### New run
 
 ```bash
-# From a PRD file
-bun run src/index.mts generate my-api --prd ./requirements.md
-
-# From a natural language prompt
-bun run src/index.mts generate my-api --prompt "Build a work order API with status tracking"
-
-# Dry run (plan only, no files written)
-bun run src/index.mts generate my-api --prd ./requirements.md --dry-run
-
-# With custom options
-bun run src/index.mts generate my-api --prd ./prd.md --max-iterations 10 --output ./output
+bun run src/index.mts --prd <file> [options]
 ```
 
-**Required arguments:**
-- `<project-name>` -- name for the generated project
-- Either `--prd <path>` or `--prompt <text>` must be provided
-
-**Optional flags:**
-- `--dry-run` -- output the generation plan without writing any files
-- `--max-iterations <n>` -- maximum fix loop iterations per feature (default: 5)
-- `--output <dir>` -- output directory for the workspace (default: .workspace)
-
-### resume
-
-Resume an interrupted generation from where it left off.
+### Resume
 
 ```bash
-bun run src/index.mts resume 01HXYZ123456
-bun run src/index.mts resume 01HXYZ123456 --max-iterations 8
+bun run src/index.mts --resume <run-id> [options]
 ```
 
-**Required arguments:**
-- `<run-id>` -- the ULID run ID from a previous generation
-
-### status
-
-Show the current generation status for a run.
+### Status / List
 
 ```bash
-bun run src/index.mts status 01HXYZ123456
-bun run src/index.mts status 01HXYZ123456 --output /custom/workspace
+bun run src/index.mts --list-runs
+bun run src/index.mts --status <run-id>
 ```
 
-### trace
+### Full option reference
 
-Show the trace summary for a completed or in-progress run.
+```
+Options:
+  -p, --prd <file>       Path to PRD markdown file (required for new runs)
+  -r, --resume <run-id>  Resume a previous run (skips completed tasks)
+  -i, --iterations <n>   Max fix loop iterations per task (default: 5)
+  -t, --max-tasks <n>    Max tasks to execute (default: all)
+  -c, --concurrency <n>  Max parallel tasks (default: 4)
+  -d, --diagrams         Generate diagrams (no prompt)
+  -D, --no-diagrams      Skip diagram generation (no prompt)
+  -N, --no-docs          Skip documentation generation
+  -V, --no-validate      Skip output validation (bun install, swagger screenshot)
+      --ui               Generate UI after successful run (no prompt)
+      --no-ui            Skip UI generation (no prompt)
+      --iac <provider>   Generate IaC after success: "cdk" or "terraform" (no prompt)
+      --no-iac           Skip IaC generation (no prompt)
+  -l, --list-runs        List all previous runs
+  -s, --status <run-id>  Show detailed status of a run
+  -h, --help             Show help
+
+When --diagrams/--no-diagrams, --ui/--no-ui, or --iac/--no-iac are omitted
+the pipeline prompts you interactively.
+```
+
+### Interactive prompts
+
+By default, the pipeline asks three questions:
+
+1. **Before pipeline**: `Generate architecture diagrams? [Y/n]`
+2. **After success**: `Generate a frontend UI for this API? [y/N]`
+3. **After success**: IaC provider menu (AWS CDK, Terraform, or skip)
+
+Pass flags to bypass any prompt:
 
 ```bash
-bun run src/index.mts trace 01HXYZ123456
+# Fully non-interactive
+bun run src/index.mts --prd my-api.md --diagrams --no-ui --iac terraform
+
+# Or skip everything
+bun run src/index.mts --prd my-api.md --no-diagrams --no-ui --no-iac
 ```
+
+UI and IaC prompts only appear when every task passes. If any task fails, the pipeline exits without asking.
 
 ---
 
 ## Legacy Mode
 
-For backwards compatibility, agent-one also supports the original positional argument syntax:
+For backwards compatibility, positional arguments are still supported:
 
 ```bash
 bun run src/index.mts ./path/to/prd.md [max-iterations] [max-tasks]
 ```
 
-This mode is automatically detected when the first argument is not a recognized command.
-
 ---
 
 ## PRD File Format
 
-A PRD file is a markdown document with checkboxes for each feature:
+A PRD is a markdown file describing your API. The planning agent needs:
 
-```markdown
-# My API
+1. **Overview** -- one paragraph describing the API
+2. **Data Models** -- entities with field names, types, and constraints
+3. **Endpoints** -- HTTP method, path, and behavior
+4. **Business Rules** -- validation, access control, domain logic
 
-- [ ] Feature: Work Orders -- CRUD for work orders with status and priority
-- [ ] Feature: Technicians -- Technician management with email
-- [ ] Feature: Assignments -- Assignment tracking
-```
-
-Features are extracted from lines matching the pattern:
-```
-- [ ] Feature: <name> -- <description>
-```
-
-The description is used to infer fields (e.g., "with status" adds a status field, "with email" adds an email field).
+See [`sample-prds/`](../sample-prds/) for examples ranging from simple to complex.
 
 ---
 
-## Dry Run Mode
+## Pipeline Phases
 
-The `--dry-run` flag runs the planning phase only:
-
-1. Parses the input (PRD or prompt)
-2. Extracts features and entities
-3. Resolves dependencies (topological sort)
-4. Generates the step-by-step plan
-5. Prints the plan to console
-6. Exits without writing any files
-
-This is useful for previewing what agent-one would generate before committing to a full run.
-
----
-
-## Claude Code Agent Mode
-
-When invoked as a Claude Code custom agent, use `src/agent-bridge.mts`:
-
-```bash
-bun run src/agent-bridge.mts --prompt "Build a work order API" --project work-orders
-bun run src/agent-bridge.mts --prd ./requirements.md --project my-api
-bun run src/agent-bridge.mts --run-id 01HXYZ123456  # Resume
-bun run src/agent-bridge.mts --prd ./prd.md --dry-run
-```
-
-The agent bridge:
-- Uses the same core orchestration as the CLI
-- Reports progress through console output (captured by Claude Code)
-- Uses CallbackReviewGate for human review checkpoints
-
----
-
-## Generation Flow
-
-1. **Parse** -- Extract features, entities, and relationships from input
-2. **Plan** -- Order features by dependency, create generation steps
-3. **Review** -- Present plan for approval (human-in-the-loop)
-4. **Generate** -- For each feature (bottom-up):
-   - Interfaces (one per file, barrel exports)
-   - Zod schemas (validation/ folder)
-   - Repository (extends BaseRepository)
-   - Service (constructor injection)
-   - Router (swagger refs in docs/)
-   - Tests (unit + integration)
-5. **Verify** -- ESLint, bun test, smoke test, Playwright screenshot
-6. **Commit** -- Git commit with conventional message per feature
-7. **Finalize** -- Session summary, documentation update
+1. **Planning** -- LLM decomposes the PRD into a DAG of tasks
+2. **Execution** -- Each task: CodeGen -> ESLint -> QA (real tests against Docker MongoDB)
+3. **Assembly** -- Wires endpoint plugins into the main entry file
+4. **Scaffolding** -- Generates `package.json`, `tsconfig.json`, `.gitignore`, `README.md`
+5. **DevContainer** -- Generates `.devcontainer/` with Docker Compose, working `.env`
+6. **Integration Testing** -- Runs integration tests for completed tasks
+7. **Documentation** -- Generates API docs from completed code
+8. **Diagrams** -- Architecture diagrams (prompted or `--diagrams`/`--no-diagrams`)
+9. **Validation** -- `bun install`, start server, Playwright Swagger screenshot
+10. **Report** -- Run report with token usage and cost
+11. **Post-success** -- Optional UI generation and IaC (AWS CDK / Terraform)
 
 ---
 
@@ -174,31 +137,49 @@ The agent bridge:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| OLLAMA_HOST | Ollama API endpoint | http://192.168.128.230:11434 |
-| OLLAMA_API_KEY | Ollama cloud API key (enables cloud models) | -- |
-| ANTHROPIC_API_KEY | Anthropic API key (enables Claude fallback) | -- |
-| OPENAI_API_KEY | OpenAI API key (enables GPT fallback) | -- |
-| MAX_FIX_ITERATIONS | Default max fix loop iterations | 5 |
-| MAX_CONCURRENCY | Max parallel task execution | 4 |
-| WORKSPACE_DIR | Output workspace directory | .workspace |
-| INTEGRATION_PORT | Base port for integration tests | 4100 |
-| LLM_TIMEOUT_MS | LLM request timeout in milliseconds | 1800000 |
+| `LLM_PROVIDER` | LLM provider: `ollama`, `openai`, or `anthropic` | `ollama` |
+| `OLLAMA_HOST` | Ollama server URL | `http://localhost:11434` |
+| `OLLAMA_API_KEY` | Ollama Cloud API key (optional) | -- |
+| `OPENAI_API_KEY` | OpenAI API key | -- |
+| `ANTHROPIC_API_KEY` | Anthropic API key | -- |
+| `MAX_FIX_ITERATIONS` | Max fix loop iterations per task | `5` |
+| `MAX_CONCURRENCY` | Max parallel task execution | `4` |
+| `TASK_COST_LIMIT` | Per-task LLM cost ceiling (USD) | `3.00` |
+| `WORKSPACE_DIR` | Output workspace directory | `.workspace` |
+| `INTEGRATION_PORT` | Base port for integration tests | `4100` |
+| `LLM_TIMEOUT_MS` | LLM request timeout | `1800000` (30 min) |
+| `TELEGRAM_BOT_TOKEN` | Telegram bot token for notifications | -- |
+| `TELEGRAM_CHAT_ID` | Telegram chat ID for notifications | -- |
+
+The pipeline verifies the selected LLM provider is reachable at startup. If Ollama isn't running or an API key is missing, it exits with setup instructions.
 
 ---
 
 ## Output Structure
 
-Each generation run creates a workspace at `.workspace/<run-id>/` containing:
+Each run creates a workspace at `.workspace/<run-id>/`:
 
 ```
 .workspace/<run-id>/
-  config.json           # Run configuration
-  plan.json             # Generated task graph
-  features.json         # Feature status tracking
-  execution-summary.json
-  pipeline-result.json
-  SESSION-HANDOFF.md    # Session handoff document
-  run.log               # Full execution log
-  tasks/                # Per-task code and iterations
-  .docs/                # Trace entries and screenshots
+  config.json              # Run configuration
+  plan.json                # Task graph (DAG)
+  execution-summary.json   # Final counts
+  token-usage.json         # LLM token tracking
+  pipeline-result.json     # Final result metadata
+  report.md                # Human-readable run report
+  SESSION-HANDOFF.md       # Session handoff document
+  logs/run.log             # Full structured log (JSON)
+  output/                  # Generated API project (runnable)
+    src/                   # Application source code
+    .devcontainer/         # Zero-setup dev environment
+    package.json
+    tsconfig.json
+    .env                   # Working defaults
+    .env.example
+    README.md
+  tasks/<task-id>/
+    code/                  # Final code for this task
+    tests/                 # Test files
+    status.json            # Completion state (used by --resume)
+    iterations/            # Per-iteration snapshots
 ```
