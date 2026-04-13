@@ -22,6 +22,9 @@ const envSchema = z.object({
   LLM_TIMEOUT_MS: z.coerce.number().int().min(10000).max(3600000).default(1800000),
   INTEGRATION_PORT: z.coerce.number().int().min(1024).max(65535).default(4100),
   TASK_COST_LIMIT: z.coerce.number().min(0).default(3.00),
+  TELEGRAM_BOT_TOKEN: z.string().optional(),
+  TELEGRAM_CHAT_ID: z.string().optional(),
+  NOTIFICATION_INTERVAL_MS: z.coerce.number().int().min(60000).max(3600000).default(300000),
 }).superRefine((data, ctx) => {
   if (data.LLM_PROVIDER === 'openai' && !data.OPENAI_API_KEY) {
     ctx.addIssue({

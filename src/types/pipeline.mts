@@ -10,6 +10,10 @@ export interface PipelineConfig {
   readonly maxTasks?: number;
   readonly integrationPort: number;
   readonly taskCostLimit: number;
+  readonly resumeRunId?: string;
+  readonly skipDiagrams?: boolean;
+  readonly skipDocs?: boolean;
+  readonly skipValidation?: boolean;
 }
 
 export interface PipelineResult {
@@ -19,4 +23,5 @@ export interface PipelineResult {
   readonly durationMs: number;
   readonly featuresJsonPath?: string;
   readonly sessionHandoffPath?: string;
+  readonly validationScreenshotPath?: string;
 }

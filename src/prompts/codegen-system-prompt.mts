@@ -301,8 +301,8 @@ const secret = new TextEncoder().encode(env.JWT_SECRET)
 
 export const authMiddleware = new Elysia({ name: 'auth-middleware' })
   .error({ UNAUTHORIZED: UnauthorizedError })
-  .onError(({ error, set, path }) => {
-    if (error instanceof UnauthorizedError) {
+  .onError(({ code, error, set, path }) => {
+    if (error instanceof UnauthorizedError || code === 'VALIDATION') {
       set.status = 401
       return { success: false, error: error.message }
     }
@@ -479,6 +479,16 @@ const hash = await Bun.password.hash(plaintext, { algorithm: 'bcrypt', cost: 10 
 // Verify a password
 const valid = await Bun.password.verify(plaintext, hash)
 \`\`\`
+
+**Auth middleware rules:**
+- **CRITICAL: Always end the middleware plugin with \`.as('plugin')\`** — without this, Elysia scopes the guard/resolve to the plugin only and they do NOT apply to routes defined after \`.use(authMiddleware)\`. This is the #1 cause of auth tests returning 200 instead of 401.
+- **CRITICAL: The \`.onError()\` handler MUST catch BOTH \`UnauthorizedError\` AND \`VALIDATION\` errors as 401.** When the Authorization header is missing, Elysia's guard throws a VALIDATION error — not UnauthorizedError. If you only handle UnauthorizedError, missing headers return 500 instead of 401.
+- **CRITICAL: Do NOT validate JWT payload against entity schemas (TenantSchema, UserSchema, etc.).** JWT tokens only contain \`sub\`, \`exp\`, \`iat\` — not the full entity. Using \`Value.Check(TenantSchema, ...)\` on JWT payload will ALWAYS fail. Just extract \`payload.sub\` as the userId.
+- Export as an Elysia plugin — protected routes \`.use(authMiddleware)\` to get \`userId\` in context
+- Use \`.guard()\` to validate the Authorization header exists
+- Use \`.resolve()\` to extract + verify the JWT token — runs AFTER validation
+- Route handlers destructure \`{ userId }\` directly from context: \`.get('/me', ({ userId }) => ...)\`
+- Do NOT use \`.derive()\` for auth — \`.resolve()\` runs after validation and is the correct lifecycle hook
 
 ## Dependency Import Rules (CRITICAL)
 When your task has dependencies (shown in "Available Code from Dependencies"), you MUST:
