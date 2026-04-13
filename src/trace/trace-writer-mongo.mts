@@ -1,4 +1,4 @@
-import type { Collection, Db } from "mongodb";
+import type { Collection, Db, OptionalId } from "mongodb";
 import type { Logger } from "winston";
 import type { ITraceEntry } from "../core/interfaces/index.mts";
 
@@ -29,7 +29,7 @@ export class TraceWriterMongo {
   public async writeEntry(entry: ITraceEntry): Promise<void> {
     try {
       const document = toMongoDocument(entry);
-      await this.collection.insertOne(document as ITraceEntry & { _id?: unknown });
+      await this.collection.insertOne(document as OptionalId<ITraceEntry>);
       this.logger.info(`[trace-mongo] Wrote trace: ${entry.traceId}`);
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -44,7 +44,7 @@ export class TraceWriterMongo {
     try {
       const documents = entries.map(toMongoDocument);
       await this.collection.insertMany(
-        documents as unknown as Array<ITraceEntry & { _id?: unknown }>,
+        documents as OptionalId<ITraceEntry>[],
       );
       this.logger.info(`[trace-mongo] Wrote ${entries.length} trace entries`);
     } catch (error) {
