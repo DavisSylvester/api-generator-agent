@@ -171,8 +171,62 @@ async function main(): Promise<void> {
   if (wantUi) {
     const uiOutputDir = `${outputDir}/ui`;
     logger.info(`Flutter UI generation requested — output will be at ${uiOutputDir}`);
-    logger.info(`Flutter UI agent is registered but screen-by-screen orchestration is not yet wired.`);
-    logger.info(`To generate manually, use the FlutterUiAgent with the PRD at sample-prds/bjj-open-mat-flutter-app.md`);
+
+    const FLUTTER_AGENT_PATH = `C:/projects/davis/agents/flutter-ui-agent/src/index.mts`;
+    const flutterPrdPath = options.prd
+      ? resolve(options.prd).replace(/\.[^.]+$/, `-flutter-app.md`)
+      : undefined;
+
+    // Check if a matching Flutter PRD exists, otherwise prompt for path
+    let prdForFlutter: string | undefined;
+    if (flutterPrdPath) {
+      try {
+        await readFile(flutterPrdPath, `utf-8`);
+        prdForFlutter = flutterPrdPath;
+      } catch {
+        // No auto-detected Flutter PRD
+      }
+    }
+
+    if (!prdForFlutter) {
+      logger.warn(`No Flutter PRD found. Provide one at: sample-prds/<name>-flutter-app.md`);
+      logger.info(`Skipping Flutter UI generation.`);
+    } else {
+      logger.info(`[flutter-ui] Spawning flutter-ui-agent`);
+      logger.info(`[flutter-ui] PRD: ${prdForFlutter}`);
+      logger.info(`[flutter-ui] API ref: ${workspaceOutputDir}`);
+      logger.info(`[flutter-ui] Output: ${uiOutputDir}`);
+
+      try {
+        const flutterProc = Bun.spawn(
+          [`bun`, `run`, FLUTTER_AGENT_PATH, `--prd`, prdForFlutter, `--api-ref`, workspaceOutputDir, `--output`, uiOutputDir],
+          {
+            stdout: `pipe`,
+            stderr: `pipe`,
+            env: { ...Bun.env },
+            cwd: `C:/projects/davis/agents/flutter-ui-agent`,
+          },
+        );
+
+        const [flutterStdout, flutterStderr] = await Promise.all([
+          new Response(flutterProc.stdout).text(),
+          new Response(flutterProc.stderr).text(),
+        ]);
+        const flutterExit = await flutterProc.exited;
+
+        if (flutterExit === 0) {
+          logger.info(`[flutter-ui] Flutter UI generation complete — ${uiOutputDir}`);
+        } else {
+          logger.warn(`[flutter-ui] Flutter UI generation failed (exit ${flutterExit})`);
+          if (flutterStderr) {
+            logger.warn(`[flutter-ui] ${flutterStderr.substring(0, 500)}`);
+          }
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        logger.warn(`[flutter-ui] Could not spawn flutter-ui-agent: ${msg}`);
+      }
+    }
   }
 
   // IaC generation
