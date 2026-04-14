@@ -1,5 +1,6 @@
 import { readFile, cp, mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { createInterface } from 'node:readline';
 import type { Logger } from 'winston';
 import { loadEnv, preflightLlmCheck } from './config/env.mts';
 import { createContainer } from './container/di.mts';
@@ -93,8 +94,19 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // Extract project name from PRD and set on notifier for Telegram titles
+  if (prdText) {
+    const headingMatch = prdText.match(/^#\s+(.+?)(?:\s*[-—]|$)/m);
+    const projectName = headingMatch?.[1]?.trim() ?? `api-generator`;
+    container.notifier.setProjectName(projectName);
+  }
+
   logger.info(`Config: maxIterations=${effectiveConfig.maxFixIterations}, concurrency=${effectiveConfig.maxConcurrency}`);
   logger.info(`LLM provider: ${effectiveConfig.llmProvider}${effectiveConfig.llmProviderHost ? ` (${effectiveConfig.llmProviderHost})` : ``}`);
+
+  // Abort controller — type "stop" in the terminal to kill the run
+  const abortController = new AbortController();
+  const stdinListener = createStdinStopListener(abortController, logger);
 
   const result = await runPipeline(prdText, effectiveConfig, {
     planningAgent: container.planningAgent,
@@ -107,7 +119,10 @@ async function main(): Promise<void> {
     primaryFactory: container.primaryFactory,
     costTracker: container.costTracker,
     notifier: container.notifier,
+    signal: abortController.signal,
   });
+
+  stdinListener.stop();
 
   if (!result.ok) {
     logger.error(`Pipeline failed: ${result.error.message}`);
@@ -295,6 +310,33 @@ function logPipelineResult(
       logger.info(`Resume with: bun run src/index.mts --resume ${pipeline.runId}`);
     }
   }
+}
+
+function createStdinStopListener(
+  controller: AbortController,
+  logger: Logger,
+): { stop: () => void } {
+  if (!process.stdin.isTTY) {
+    return { stop: () => {} };
+  }
+
+  const rl = createInterface({ input: process.stdin });
+  logger.info(`Type "stop" to abort the pipeline`);
+
+  rl.on(`line`, (line) => {
+    const trimmed = line.trim().toLowerCase();
+    if (trimmed === `stop`) {
+      logger.warn(`Stop command received — aborting pipeline after current tasks finish`);
+      controller.abort();
+      rl.close();
+    }
+  });
+
+  return {
+    stop: () => {
+      rl.close();
+    },
+  };
 }
 
 main().catch((e) => {

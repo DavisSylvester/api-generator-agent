@@ -58,6 +58,7 @@ export interface PipelineDeps {
   readonly primaryFactory?: ILlmFactory;
   readonly costTracker?: CostTracker;
   readonly notifier?: Notifier;
+  readonly signal?: AbortSignal;
 }
 
 export async function runPipeline(
@@ -321,7 +322,7 @@ export async function runPipeline(
 
       return result;
     },
-    { maxConcurrency: config.maxConcurrency, preCompleted: preCompletedMap },
+    { maxConcurrency: config.maxConcurrency, preCompleted: preCompletedMap, signal: deps.signal },
     logger,
   );
 

@@ -289,11 +289,29 @@ api-generator-agent bench --suite standard --provider openai
 
 ---
 
+### Telegram Remote Stop Command
+
+**Reference:** CI/CD bots that accept `/cancel` commands via chat.
+
+Allow users to stop a running pipeline by sending `stop` to the Telegram bot. Currently, the `stop` command only works in a foreground terminal (stdin). Background runs launched via `run-bg.sh` or on a remote server have no way to be stopped short of `kill <PID>`.
+
+**Implementation notes:**
+- Add a polling loop that checks for incoming Telegram messages via `getUpdates` (long-polling) or a webhook
+- Filter messages from the configured `TELEGRAM_CHAT_ID` only
+- If message text is `stop` or `/stop`, call `AbortController.abort()` on the running pipeline
+- Send a confirmation message back: "Pipeline stopping — current tasks will finish, no new tasks will start"
+- The existing `AbortSignal` plumbing in `parallel-executor.mts` already handles graceful shutdown
+- Polling interval: 5 seconds (same as status update cadence)
+- Must work regardless of launch mode (foreground, background, Docker, remote)
+- Security: only accept stop commands from the configured chat ID, ignore all others
+
+---
+
 ## Priority Summary
 
 | Tier | Items | Theme |
 |---|---|---|
-| **P2** | Docker image, YAML config, sandbox, checkpoints, OTEL, .agentignore, update checker, changelog, permission gates | Catch up with mature agents |
+| **P2** | Docker image, YAML config, sandbox, checkpoints, OTEL, .agentignore, update checker, changelog, permission gates, Telegram remote stop | Catch up with mature agents |
 | **P3** | Interactive REPL, browser preview, VS Code extension, voice input, multi-framework, benchmark harness | Stand-alone differentiators |
 
 ## Implementation Order (Recommended)

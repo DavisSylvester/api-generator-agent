@@ -3,6 +3,7 @@ import type { NotificationChannel, PipelineEvent } from './notifier.mts';
 export interface TelegramConfig {
   readonly botToken: string;
   readonly chatId: string;
+  readonly projectName?: string;
 }
 
 const EMOJI_MAP: Record<PipelineEvent['type'], string> = {
@@ -58,23 +59,31 @@ export class TelegramChannel implements NotificationChannel {
   private readonly botToken: string;
   private readonly chatId: string;
   private readonly apiBase: string;
+  private projectName: string;
 
   constructor(config: TelegramConfig) {
     this.botToken = config.botToken;
     this.chatId = config.chatId;
     this.apiBase = `https://api.telegram.org/bot${this.botToken}`;
+    this.projectName = config.projectName ?? `api-generator`;
+  }
+
+  public setProjectName(name: string): void {
+    this.projectName = name;
   }
 
   public async send(event: PipelineEvent): Promise<void> {
-    const text = formatEvent(event);
-    await this.sendMessage(text);
+    const title = `*${this.projectName}*`;
+    const body = formatEvent(event);
+    await this.sendMessage(`${title}\n${body}`);
   }
 
   public async sendBatch(events: readonly PipelineEvent[]): Promise<void> {
     if (events.length === 0) return;
 
+    const title = `*${this.projectName}*`;
     const combined = events.map(formatEvent).join(`\n\n---\n\n`);
-    await this.sendMessage(combined);
+    await this.sendMessage(`${title}\n${combined}`);
   }
 
   private async sendMessage(text: string): Promise<void> {

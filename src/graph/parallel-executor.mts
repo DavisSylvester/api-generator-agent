@@ -8,6 +8,7 @@ export type TaskProcessor = (task: Task) => Promise<Result<TaskState, Error>>;
 export interface ExecutorConfig {
   readonly maxConcurrency: number;
   readonly preCompleted?: ReadonlyMap<string, TaskState>;
+  readonly signal?: AbortSignal;
 }
 
 export async function executeGraph(
@@ -39,6 +40,19 @@ export async function executeGraph(
   const inFlight = new Map<string, Promise<string>>();
 
   while (completed.size + failed.size < totalTasks) {
+    // Check for abort
+    if (config.signal?.aborted) {
+      logger.warn(`[executor] Abort signal received — stopping pipeline`);
+      // Mark all remaining tasks as skipped
+      for (const task of graph.tasks) {
+        if (!results.has(task.id)) {
+          results.set(task.id, { taskId: task.id, status: `skipped`, iteration: 0, lastError: `Aborted by user` });
+          failed.add(task.id);
+        }
+      }
+      break;
+    }
+
     // Mark skipped tasks (dependencies failed)
     const skipped = getSkippedTasks(graph, failed);
     for (const task of skipped) {

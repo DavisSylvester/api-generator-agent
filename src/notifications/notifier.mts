@@ -16,6 +16,7 @@ export interface NotificationChannel {
   readonly name: string;
   send(event: PipelineEvent): Promise<void>;
   sendBatch(events: readonly PipelineEvent[]): Promise<void>;
+  setProjectName?(name: string): void;
 }
 
 export interface NotifierConfig {
@@ -60,6 +61,12 @@ export class Notifier {
 
   constructor(config?: Partial<NotifierConfig>) {
     this.config = { ...DEFAULT_CONFIG, ...config, notifyOn: { ...DEFAULT_CONFIG.notifyOn, ...config?.notifyOn } };
+  }
+
+  public setProjectName(name: string): void {
+    for (const channel of this.config.channels) {
+      channel.setProjectName?.(name);
+    }
   }
 
   public start(totalTasks: number): void {
