@@ -16,6 +16,7 @@ import { EslintAgent } from '../agents/eslint-agent.mts';
 import { QaAgent } from '../agents/qa-agent.mts';
 import { DocumentationAgent } from '../agents/documentation-agent.mts';
 import { FlutterUiAgent } from '../agents/flutter-ui-agent.mts';
+import { PrdExpansionAgent } from '../agents/prd-expansion-agent.mts';
 import type { FallbackTier } from '../config/fallback-tiers.mts';
 import { Notifier } from '../notifications/notifier.mts';
 import { TelegramChannel } from '../notifications/telegram-channel.mts';
@@ -33,6 +34,7 @@ export interface Container {
   readonly qaAgent: QaAgent;
   readonly documentationAgent: DocumentationAgent;
   readonly flutterUiAgent: FlutterUiAgent;
+  readonly prdExpansionAgent: PrdExpansionAgent;
   readonly pipelineConfig: PipelineConfig;
   readonly fallbackTiers: readonly FallbackTier[];
   readonly costTracker: CostTracker;
@@ -133,7 +135,10 @@ export function createContainer(env: EnvConfig): Container {
 
   const primaryFactory = createPrimaryFactory(env, logger);
 
-  // For Ollama, use cloud Ollama for codegen if API key is set
+  // For Ollama, use cloud Ollama for codegen + qa only; planning + documentation
+  // stay on the primary (local) Ollama. This matches the original design:
+  // heavy-weight codegen benefits from cloud GPU scale, while planning on a
+  // smaller local model is fast and private.
   const CLOUD_TIMEOUT_MS = 600000;
   let codegenFactory: ILlmFactory = primaryFactory;
   if (provider === 'ollama' && env.OLLAMA_API_KEY) {
@@ -181,6 +186,13 @@ export function createContainer(env: EnvConfig): Container {
     timeoutMs,
   );
 
+  const prdExpansionAgent = new PrdExpansionAgent(
+    modelChains['prd-expansion'],
+    primaryFactory,
+    logger,
+    timeoutMs,
+  );
+
   const costTracker = new CostTracker(logger);
   const fallbackTiers = buildFallbackTiers(env, logger);
 
@@ -220,6 +232,7 @@ export function createContainer(env: EnvConfig): Container {
     qaAgent,
     documentationAgent,
     flutterUiAgent,
+    prdExpansionAgent,
     pipelineConfig,
     fallbackTiers,
     costTracker,

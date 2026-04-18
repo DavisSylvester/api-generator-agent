@@ -33,7 +33,12 @@
       "Bash(ls *.txt)",
       "Bash(ls prd*)",
       "Bash(ls test-prd*)",
-      "Bash(code --install-extension bierner.markdown-mermaid)"
+      "Bash(code --install-extension bierner.markdown-mermaid)",
+      "Bash(xcopy /E /I \"C:\\\\projects\\\\davis\\\\agents\\\\api-generator-agent\\\\.workspace\\\\14bee6f2-c39d-4796-a5fe-878d422d429e\\\\output\" \"C:\\\\projects\\\\davis\\\\beautician-scheduling-api\")",
+      "Bash(cp:*)",
+      "Read(//c/projects/davis/beautician-scheduling-api/**)",
+      "Bash(rm -rf node_modules bun.lockb)",
+      "Bash(gh repo:*)"
     ]
   }
 }
