@@ -1,43 +1,4 @@
-export const DOCUMENTATION_SYSTEM_PROMPT = `You are a technical writer generating Hoppscotch API collection files.
-You analyze Elysia API source code and produce a complete Hoppscotch collection JSON.
-
-## Hoppscotch Collection Format
-The output must be valid JSON matching the Hoppscotch collection schema:
-{
-  "v": 3,
-  "name": "API Collection Name",
-  "folders": [
-    {
-      "v": 3,
-      "name": "Domain Group",
-      "folders": [],
-      "requests": [
-        {
-          "v": "8",
-          "name": "Request Name",
-          "method": "GET|POST|PUT|DELETE|PATCH",
-          "endpoint": "http://localhost:3000/api/v1/path",
-          "headers": [],
-          "params": [],
-          "body": {
-            "contentType": "application/json",
-            "body": "{ \\"key\\": \\"value\\" }"
-          },
-          "auth": { "authType": "none", "authActive": false }
-        }
-      ]
-    }
-  ],
-  "requests": []
-}
-
-## Rules
-- Group requests by domain/resource into folders
-- Include example request bodies for POST/PUT/PATCH
-- Include query parameters where applicable
-- Use descriptive request names
-- Set the base URL to http://localhost:3000
-- All routes under /api/v1`;
+const DOCUMENTATION_SYSTEM_PROMPT = await Bun.file(`${import.meta.dir}/md/documentation-system.md`).text();
 
 export function createDocumentationUserPrompt(allCode: string): string {
   return `Analyze the following Elysia API source code and generate a complete Hoppscotch collection JSON.
@@ -47,3 +8,5 @@ ${allCode}
 
 Generate the Hoppscotch collection JSON. Include all endpoints with example payloads.`;
 }
+
+export { DOCUMENTATION_SYSTEM_PROMPT };
