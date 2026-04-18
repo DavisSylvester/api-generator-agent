@@ -76,6 +76,34 @@ export async function validateOutput(
     }
     logger.info(`[validate] Server ready at ${baseUrl}`);
 
+    // Step 3a: Verify /healthz does NOT exist (must be /health)
+    try {
+      const healthzRes = await fetch(`${baseUrl}/healthz`, { signal: AbortSignal.timeout(2_000) });
+      if (healthzRes.ok) {
+        errors.push(`WRONG: /healthz exists — health endpoint must be /health, not /healthz`);
+        logger.warn(`[validate] /healthz should not exist — use /health instead`);
+      }
+    } catch {
+      // Good — /healthz should not respond
+    }
+
+    // Step 3b: Verify CORS headers are present
+    try {
+      const corsRes = await fetch(`${baseUrl}/health`, {
+        signal: AbortSignal.timeout(2_000),
+        headers: { 'Origin': `http://localhost:9999` },
+      });
+      const corsHeader = corsRes.headers.get(`access-control-allow-origin`);
+      if (corsHeader) {
+        logger.info(`[validate] CORS enabled: ${corsHeader}`);
+      } else {
+        errors.push(`CORS not enabled — Access-Control-Allow-Origin header missing`);
+        logger.warn(`[validate] CORS headers missing — API must use .use(cors())`);
+      }
+    } catch {
+      errors.push(`CORS check failed`);
+    }
+
     // Step 4: Use Playwright to navigate to swagger page and take a screenshot.
     // Playwright's chromium.launch() uses pipe IPC which doesn't work under Bun,
     // so we spawn a Node.js subprocess to run the browser automation.

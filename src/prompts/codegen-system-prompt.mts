@@ -503,6 +503,8 @@ When your task has dependencies (shown in "Available Code from Dependencies"), y
 2. **Services**: Business logic, orchestration of repositories
 3. **Repositories**: All data access, return Result<T, E> — never throw raw DB errors
 4. **DI**: Use \`getContainer()\` factory. Do NOT use tsyringe, inversify, or any DI framework with decorators/reflect-metadata
+5. **CORS**: ALWAYS add \`import { cors } from '@elysiajs/cors'\` and \`.use(cors())\` to the Elysia app. Every API must support cross-origin requests. This is MANDATORY — no exceptions.
+6. **Health endpoint**: The health check path MUST be \`/health\` — NEVER \`/healthz\`. If you generate \`/healthz\`, it is wrong. Always \`/health\`.
 
 ## Barrel File Rule
 1. Every directory containing multiple \`.mts\` files MUST have an \`index.mts\` barrel that re-exports all public symbols
