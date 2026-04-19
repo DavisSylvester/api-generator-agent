@@ -16,7 +16,7 @@ const envSchema = z.object({
   LANGSMITH_ENDPOINT: z.string().url().default('https://api.smith.langchain.com'),
   LANGSMITH_API_KEY: z.string().default(``),
   LANGSMITH_PROJECT: z.string().default('api-generator-agent'),
-  MAX_FIX_ITERATIONS: z.coerce.number().int().min(1).max(20).default(5),
+  MAX_FIX_ITERATIONS: z.coerce.number().int().min(1).max(20).default(20),
   MAX_CONCURRENCY: z.coerce.number().int().min(1).max(8).default(4),
   WORKSPACE_DIR: z.string().default('.workspace'),
   LLM_TIMEOUT_MS: z.coerce.number().int().min(10000).max(3600000).default(1800000),

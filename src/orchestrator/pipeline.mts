@@ -7,6 +7,8 @@ import type { Result } from '../types/result.mts';
 import { ok, err } from '../types/result.mts';
 import { Workspace } from '../io/workspace.mts';
 import { writeJson, readJson, readAllCodeFiles } from '../io/file-protocol.mts';
+import { ActivityLog } from '../io/activity-log.mts';
+import { ProgressReporter } from '../io/progress-reporter.mts';
 import { access, readFile, writeFile, mkdir } from 'node:fs/promises';
 import type { CodeFile } from '../agents/codegen-agent.mts';
 import { z } from 'zod';
@@ -248,6 +250,32 @@ export async function runPipeline(
   const notifier = deps.notifier;
   notifier?.start(taskGraph.tasks.length);
 
+  // Observability — one ProgressReporter per run, one ActivityLog per task.
+  // Writes land under `<workspace>/.docs/` (see Workspace.activityDocsDir()).
+  // If the cost tracker is absent (older deps), the reporter is skipped.
+  let progressReporter: ProgressReporter | undefined;
+  const activityLogs: Map<string, ActivityLog> = new Map();
+  if (deps.costTracker) {
+    progressReporter = new ProgressReporter({
+      runId,
+      progressPath: workspace.runProgressPath(),
+      prdSize: prdText.length,
+      provider: config.llmProvider,
+      maxIterations: config.maxFixIterations,
+      concurrency: config.maxConcurrency,
+      costTracker: deps.costTracker,
+    });
+    for (const t of taskGraph.tasks) {
+      activityLogs.set(t.id, new ActivityLog(workspace.taskActivityPath(t.id)));
+    }
+    progressReporter.registerTasks(taskGraph.tasks.map((t) => ({
+      id: t.id,
+      name: t.name,
+      type: t.type,
+      activityPath: workspace.taskActivityPath(t.id),
+    })));
+  }
+
   const taskStates = await executeGraph(
     taskGraph,
     async (task) => {
@@ -262,6 +290,8 @@ export async function runPipeline(
         dummyFactory: deps.primaryFactory,
         costTracker: deps.costTracker,
         taskCostLimit: config.taskCostLimit,
+        activityLog: activityLogs.get(task.id),
+        progressReporter,
       };
       const fixConfig = { maxIterations: config.maxFixIterations, integrationPort: taskPort };
 
@@ -612,6 +642,11 @@ export async function runPipeline(
     costSummary: deps.costTracker?.getSummary(),
     generatedFiles,
     assembledIndexPath,
+    activityPaths: Object.fromEntries(
+      taskGraph.tasks.map((t) => [t.id, workspace.taskActivityPath(t.id)]),
+    ),
+    progressPath: workspace.runProgressPath(),
+    reportPath: workspace.reportPath(),
   });
 
   await writeFile(workspace.reportPath(), report, 'utf-8');
@@ -643,6 +678,11 @@ export async function runPipeline(
     history: tokenTracker.getHistory(),
   });
 
+  // Observability — finalize the progress file so it reflects end-state.
+  if (progressReporter) {
+    await progressReporter.flush();
+    logger.info(`Progress file: ${workspace.runProgressPath()}`);
+  }
 
   // Write final pipeline result
   await writeJson(`${workspace.root}/pipeline-result.json`, {

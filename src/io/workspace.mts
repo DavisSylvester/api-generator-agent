@@ -146,4 +146,26 @@ export class Workspace {
   public reportPath(): string {
     return join(this.root, `report.md`);
   }
+
+  // ── Observability (.docs/) ────────────────────────────────────────────────
+  //
+  // Lives at `.workspace/<runId>/.docs/`. Kept separate from `docs/` (which
+  // holds the hoppscotch collection) so the observability artifacts are easy
+  // to `rm -rf` without touching generated deliverables.
+
+  public activityDocsDir(): string {
+    return join(this.root, '.docs');
+  }
+
+  public taskActivityDir(taskId: string): string {
+    return join(this.activityDocsDir(), 'tasks', taskId);
+  }
+
+  public taskActivityPath(taskId: string): string {
+    return join(this.taskActivityDir(taskId), 'activity.md');
+  }
+
+  public runProgressPath(): string {
+    return join(this.activityDocsDir(), 'progress.md');
+  }
 }

@@ -10,6 +10,8 @@ import type { QaAgent, QaInput } from '../agents/qa-agent.mts';
 import type { Workspace } from '../io/workspace.mts';
 import type { ILlmFactory } from '../interfaces/i-llm-factory.mjs';
 import type { CostTracker } from '../llm/cost-tracker.mts';
+import type { ActivityLog } from '../io/activity-log.mts';
+import type { ProgressReporter } from '../io/progress-reporter.mts';
 import { CostLimitExceededError } from '../types/llm-errors.mts';
 import { writeJson, writeCode, readAllCodeFiles } from '../io/file-protocol.mts';
 import { writeFile, mkdir, readFile } from 'node:fs/promises';
@@ -37,6 +39,10 @@ export interface FixLoopDeps {
   readonly dummyFactory?: ILlmFactory;
   readonly costTracker?: CostTracker;
   readonly taskCostLimit?: number;
+  // Observability — both optional so fallback-fix-loop / older callers
+  // continue to work. When present, every pipeline event flushes to disk.
+  readonly activityLog?: ActivityLog;
+  readonly progressReporter?: ProgressReporter;
 }
 
 export async function runFixLoop(
@@ -45,9 +51,17 @@ export async function runFixLoop(
   deps: FixLoopDeps,
   config: FixLoopConfig,
 ): Promise<Result<TaskState, Error>> {
-  const { codegenAgent, eslintAgent, qaAgent, workspace, logger } = deps;
+  const { codegenAgent, eslintAgent, qaAgent, workspace, logger, activityLog, progressReporter } = deps;
 
   await workspace.initTask(task.id);
+
+  // Observability — task-level start. Safe when hooks are undefined.
+  progressReporter?.taskStarted(task.id);
+  await activityLog?.event({
+    type: 'task-start',
+    summary: `Task "${task.name}" (${task.id}) started`,
+    meta: { type: task.type, maxIterations: config.maxIterations },
+  });
 
   let lastErrors: readonly string[] = [];
   let lastCode: readonly CodeFile[] = [];
@@ -100,6 +114,18 @@ export async function runFixLoop(
       startedAt: new Date().toISOString(),
       mode: iteration === 0 ? 'generate' : 'fix',
       previousErrors: iteration > 0 ? lastErrors.length : 0,
+    });
+
+    // Observability — iteration start
+    progressReporter?.iterationStarted(task.id, iteration + 1);
+    await activityLog?.event({
+      type: 'iteration-start',
+      summary: `Iteration ${String(iteration + 1)}/${String(config.maxIterations)} (${iteration === 0 ? 'generate' : 'fix'} mode)`,
+      meta: { iteration: iteration + 1, previousErrors: iteration > 0 ? lastErrors.length : 0 },
+    });
+    await activityLog?.event({
+      type: 'codegen-start',
+      summary: `CodeGen step start`,
     });
 
     // Step 1: CodeGen
@@ -229,6 +255,12 @@ export async function runFixLoop(
           iteration,
           lastError: costErr.message,
         });
+        await activityLog?.event({
+          type: 'task-end',
+          summary: `Task FAILED — cost limit exceeded`,
+          meta: { status: 'failed', iterations: iteration, error: costErr.message },
+        });
+        progressReporter?.taskCompleted(task.id, { passed: false, iterations: iteration, error: costErr.message });
         return ok({
           taskId: task.id,
           status: 'failed',
@@ -270,6 +302,14 @@ export async function runFixLoop(
       model: codegenResult.value.modelUsed,
       fileCount: codeFiles.length,
       files: codeFiles.map((f) => ({ path: f.path, chars: f.content.length })),
+    });
+    progressReporter?.stepCompleted(task.id, 'codegen', codegenDurationMs);
+    await activityLog?.event({
+      type: 'codegen-end',
+      summary: `CodeGen produced ${String(codeFiles.length)} files (${String(testFiles.length)} tests)`,
+      meta: { model: codegenResult.value.modelUsed, inputTokens: codegenResult.value.inputTokens, outputTokens: codegenResult.value.outputTokens },
+      durationMs: codegenDurationMs,
+      artifactPath: `${iterDir}/codegen-result.json`,
     });
 
     // Write prompt iteration log
@@ -328,6 +368,7 @@ export async function runFixLoop(
     }
 
     // Step 2: ESLint
+    await activityLog?.event({ type: 'eslint-start', summary: `ESLint step start` });
     logger.info('[fix-loop] Step 2/3: ESLint');
     const lintStartMs = performance.now();
     const lintDir = workspace.taskLintedDir(task.id);
@@ -345,6 +386,13 @@ export async function runFixLoop(
       durationMs: lintDurationMs,
       passed: lintResult.ok,
       fileCount: codeFiles.length,
+    });
+    progressReporter?.stepCompleted(task.id, 'eslint', lintDurationMs);
+    await activityLog?.event({
+      type: 'eslint-end',
+      summary: lintResult.ok ? `ESLint passed (${String(codeFiles.length)} files)` : `ESLint had issues — continuing`,
+      durationMs: lintDurationMs,
+      artifactPath: `${iterDir}/eslint-result.json`,
     });
 
     // Import validation — catch missing/wrong module paths before QA
@@ -412,6 +460,7 @@ export async function runFixLoop(
     );
     logger.info(`[fix-loop] Extracted ${exportInfos.length} exports for QA constraint`);
 
+    await activityLog?.event({ type: 'qa-start', summary: `QA step start (runOnly, unit-only)` });
     const qaStartMs = performance.now();
     const qaInput: AgentInput<QaInput> = {
       runId,
@@ -444,6 +493,18 @@ export async function runFixLoop(
         passed: false,
         agentError: qaResult.error.message,
       });
+      progressReporter?.stepCompleted(task.id, 'qa', qaDurationMs);
+      await activityLog?.event({
+        type: 'qa-end',
+        summary: `QA agent errored: ${qaResult.error.message.slice(0, 120)}`,
+        durationMs: qaDurationMs,
+        artifactPath: `${iterDir}/qa-result.json`,
+      });
+      await activityLog?.event({
+        type: 'iteration-end',
+        summary: `Iteration ${String(iteration + 1)} failed — QA agent error`,
+        meta: { iteration: iteration + 1, result: 'agent-error' },
+      });
       lastErrors = [qaResult.error.message];
       lastCode = codeFiles.map((f) => ({
         path: f.path.replace(/^(src\/)+/, `src/`),
@@ -468,6 +529,17 @@ export async function runFixLoop(
     });
 
     const iterDurationMs = Math.round(performance.now() - iterStartMs);
+
+    progressReporter?.stepCompleted(task.id, 'qa', qaDurationMs);
+    await activityLog?.event({
+      type: 'qa-end',
+      summary: qa.passed
+        ? `QA passed (unit)`
+        : `QA failed — ${String(qa.unit.errors.length)} unit errors, ${String(qa.integration.errors.length)} integration errors`,
+      meta: { unitPassed: qa.unit.passed, integrationPassed: qa.integration.passed, model: qaResult.value.modelUsed },
+      durationMs: qaDurationMs,
+      artifactPath: `${iterDir}/qa-result.json`,
+    });
 
     if (qa.passed) {
       logger.info(`[fix-loop] Task ${task.id} passed QA on iteration ${iteration + 1} (total: ${iterDurationMs}ms)`);
@@ -508,6 +580,19 @@ export async function runFixLoop(
         status: 'completed',
         iteration: iteration + 1,
       });
+
+      await activityLog?.event({
+        type: 'iteration-end',
+        summary: `Iteration ${String(iteration + 1)} passed`,
+        meta: { iteration: iteration + 1, result: 'pass' },
+        durationMs: iterDurationMs,
+      });
+      await activityLog?.event({
+        type: 'task-end',
+        summary: `Task completed — ${String(iteration + 1)} iteration(s)`,
+        meta: { status: 'completed', iterations: iteration + 1 },
+      });
+      progressReporter?.taskCompleted(task.id, { passed: true, iterations: iteration + 1 });
 
       return ok({
         taskId: task.id,
@@ -580,6 +665,13 @@ export async function runFixLoop(
       completedAt: new Date().toISOString(),
       result: 'failed',
     });
+    await activityLog?.event({
+      type: 'iteration-end',
+      summary: `Iteration ${String(iteration + 1)} failed — ${String(qa.errors.length)} errors; retrying`,
+      meta: { iteration: iteration + 1, result: 'fail' },
+      durationMs: iterDurationMs,
+      artifactPath: `${iterDir}/errors.json`,
+    });
 
     // Circuit breaker: if error count hasn't decreased for N consecutive iterations, break
     const currentErrorCount = lastErrors.length;
@@ -635,6 +727,17 @@ export async function runFixLoop(
     lastError: failReason,
     circuitBroken,
     lastErrors: [...lastErrors].slice(0, 10),
+  });
+
+  await activityLog?.event({
+    type: 'task-end',
+    summary: `Task FAILED — exceeded ${String(config.maxIterations)} fix iterations`,
+    meta: { status: 'failed', iterations: config.maxIterations },
+  });
+  progressReporter?.taskCompleted(task.id, {
+    passed: false,
+    iterations: config.maxIterations,
+    error: `Exceeded ${String(config.maxIterations)} fix iterations`,
   });
 
   return ok({

@@ -51,6 +51,37 @@ export class QaAgent extends BaseAgent<QaInput, QaResult> {
   private static readonly MONGO_CONTAINER_NAME = `qa-mongodb`;
   private static readonly MONGO_PORT = 27018;
 
+  // Test env stubs. Generated services (auth, graph-email, etc.) commonly read
+  // these at module-load time and throw if missing, which blows up test
+  // imports with "ReferenceError: Cannot access 'X' before initialization"
+  // (TDZ from a failed evaluation). Stubs are dummy placeholder values —
+  // generated tests can still override per-test. All URLs point at localhost
+  // so nothing leaves the sandbox.
+  private static readonly TEST_ENV_STUBS: Record<string, string> = {
+    // AAD (Azure AD / Entra ID)
+    AAD_ISSUER: `https://login.microsoftonline.test/00000000-0000-0000-0000-000000000000/v2.0`,
+    AAD_JWKS_URI: `https://login.microsoftonline.test/00000000-0000-0000-0000-000000000000/discovery/v2.0/keys`,
+    AAD_AUDIENCE: `api://qa-test-audience`,
+    AAD_TENANT_ID: `00000000-0000-0000-0000-000000000000`,
+    // Auth0
+    AUTH0_ISSUER: `https://qa-test.auth0.test/`,
+    AUTH0_DOMAIN: `qa-test.auth0.test`,
+    AUTH0_JWKS_URI: `https://qa-test.auth0.test/.well-known/jwks.json`,
+    AUTH0_AUDIENCE: `https://qa-test/api`,
+    AUTH0_MGMT_CLIENT_ID: `qa-mgmt-client-id`,
+    AUTH0_MGMT_CLIENT_SECRET: `qa-mgmt-client-secret`,
+    // Microsoft Graph (outbound mail)
+    GRAPH_TENANT_ID: `00000000-0000-0000-0000-000000000000`,
+    GRAPH_CLIENT_ID: `qa-graph-client-id`,
+    GRAPH_CLIENT_SECRET: `qa-graph-client-secret`,
+    GRAPH_SENDER_UPN: `noreply@qa-test.local`,
+    // Service-to-service allowlist (comma-separated client ids)
+    SERVICE_ACCOUNT_CLIENT_IDS: `qa-s2s-client-id`,
+    // Misc URLs referenced by invite-flow / redirect logic
+    FRONTEND_URL: `http://localhost:4200`,
+    INVITE_RESULT_URL: `http://localhost/welcome`,
+  };
+
   protected async execute(
     input: AgentInput<QaInput>,
     _chatModel: BaseChatModel,
@@ -438,6 +469,11 @@ export class QaAgent extends BaseAgent<QaInput, QaResult> {
         stderr: 'pipe',
         env: {
           ...Bun.env,
+          // Stub env vars that generated code reads at module-load time.
+          // Spread BEFORE user-supplied overrides so explicit Bun.env values
+          // win (but crucially, these stubs fill gaps when the generated
+          // service throws on missing vars).
+          ...QaAgent.TEST_ENV_STUBS,
           MONGODB_URI: QaAgent.mongoUri ?? `mongodb://localhost:${QaAgent.MONGO_PORT}/test-db`,
         },
       });
@@ -495,7 +531,15 @@ export class QaAgent extends BaseAgent<QaInput, QaResult> {
       serverProc = Bun.spawn(['bun', 'run', entryPath], {
         stdout: 'pipe',
         stderr: 'pipe',
-        env: { ...Bun.env, PORT: String(port) },
+        env: {
+          ...Bun.env,
+          // Integration server also needs stubs — the generated entry file
+          // wires DI at boot and will throw on missing AAD/Graph vars before
+          // the first request ever arrives. Same pattern as unit tests above.
+          ...QaAgent.TEST_ENV_STUBS,
+          MONGODB_URI: QaAgent.mongoUri ?? `mongodb://localhost:${QaAgent.MONGO_PORT}/test-db`,
+          PORT: String(port),
+        },
       });
 
       // Wait for the server to be ready

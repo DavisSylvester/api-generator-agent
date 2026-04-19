@@ -1,5 +1,6 @@
 import type { Task, TaskGraph, TaskState } from "../types/task.mts";
 import type { CostSummary } from "../llm/cost-tracker.mts";
+import { relative, dirname } from "node:path";
 
 export interface ReportData {
   readonly runId: string;
@@ -16,6 +17,11 @@ export interface ReportData {
   readonly costSummary?: CostSummary;
   readonly generatedFiles: readonly GeneratedFileEntry[];
   readonly assembledIndexPath?: string;
+  // Observability links. Absolute paths; report-generator computes relative
+  // paths from the report file's location when rendering.
+  readonly activityPaths?: Record<string, string>;
+  readonly progressPath?: string;
+  readonly reportPath?: string;
 }
 
 export interface GeneratedFileEntry {
@@ -75,14 +81,42 @@ export function generateReport(data: ReportData): string {
   });
   lines.push(``);
 
+  // Observability index — link to the live progress file + per-task activity
+  // logs. Useful for post-hoc investigation of what happened during the run.
+  if (data.progressPath || data.activityPaths) {
+    const reportBaseDir = data.reportPath ? dirname(data.reportPath) : ".";
+    lines.push(`## Observability`);
+    lines.push(``);
+    if (data.progressPath) {
+      const rel = relative(reportBaseDir, data.progressPath).replace(/\\/g, "/");
+      lines.push(`- [Live progress](${rel})`);
+    }
+    lines.push(``);
+  }
+
   // Task Results
   lines.push(`## Task Results`);
   lines.push(``);
-  lines.push(`| Task ID | Status | Iterations | Error |`);
-  lines.push(`|---|---|---|---|`);
+  const hasActivity = data.activityPaths !== undefined && Object.keys(data.activityPaths).length > 0;
+  const reportBaseDir = data.reportPath ? dirname(data.reportPath) : ".";
+  if (hasActivity) {
+    lines.push(`| Task ID | Status | Iterations | Activity | Error |`);
+    lines.push(`|---|---|---|---|---|`);
+  } else {
+    lines.push(`| Task ID | Status | Iterations | Error |`);
+    lines.push(`|---|---|---|---|`);
+  }
   for (const state of data.taskStates) {
     const error = state.lastError ? state.lastError.substring(0, 100) : "-";
-    lines.push(`| \`${state.taskId}\` | ${statusIcon(state.status)} | ${state.iteration} | ${error} |`);
+    if (hasActivity) {
+      const activityAbs = data.activityPaths?.[state.taskId];
+      const activityLink = activityAbs !== undefined
+        ? `[log](${relative(reportBaseDir, activityAbs).replace(/\\/g, "/")})`
+        : "-";
+      lines.push(`| \`${state.taskId}\` | ${statusIcon(state.status)} | ${state.iteration} | ${activityLink} | ${error} |`);
+    } else {
+      lines.push(`| \`${state.taskId}\` | ${statusIcon(state.status)} | ${state.iteration} | ${error} |`);
+    }
   }
   lines.push(``);
 
