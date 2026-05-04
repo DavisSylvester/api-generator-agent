@@ -41,7 +41,9 @@
       "Bash(gh repo:*)",
       "Bash(code-insiders C:\\\\projects\\\\davisSylvester\\\\agents\\\\api-generator-agent *)",
       "Bash(git pull *)",
-      "Bash(git add *)"
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git push *)"
     ]
   }
 }

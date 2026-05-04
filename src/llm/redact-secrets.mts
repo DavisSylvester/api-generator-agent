@@ -5,16 +5,29 @@ const SECRET_KEYS = new Set([
   "OPENAI_API_KEY",
   "OLLAMA_API_KEY",
   "LANGSMITH_API_KEY",
+  "TELEGRAM_BOT_TOKEN",
+  "DISCORD_BOT_TOKEN",
+  "DISCORD_PIPELINE_WEBHOOK_URL",
+  "DISCORD_QA_TOOLS_WEBHOOK_URL",
+  "DISCORD_ALERT_WEBHOOK_URL",
   "apiKey",
   "api_key",
   "anthropicApiKey",
   "openAIApiKey",
+  "botToken",
+  "webhookUrl",
+  "pipelineWebhookUrl",
+  "alertWebhookUrl",
 ]);
 
 const SECRET_PATTERNS = [
   /sk-ant-[A-Za-z0-9_-]{20,}/g,
   /sk-[A-Za-z0-9_-]{20,}/g,
   /key-[A-Za-z0-9_-]{20,}/g,
+  // Discord webhook URLs: https://discord.com/api/webhooks/<id>/<token>
+  /https?:\/\/(?:[a-z0-9-]+\.)?discord(?:app)?\.com\/api\/webhooks\/\d+\/[A-Za-z0-9_-]+/gi,
+  // Discord bot tokens (Bot <token>) — rough match; tokens are 59+ chars of base64-ish
+  /Bot\s+[A-Za-z0-9._-]{50,}/g,
 ];
 
 function redactValue(value: unknown): unknown {

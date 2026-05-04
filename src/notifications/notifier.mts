@@ -1,5 +1,6 @@
 export interface PipelineEvent {
   readonly type: 'task_started' | 'task_passed' | 'task_failed' | 'circuit_break' | 'fallback_escalation' | 'fallback_success' | 'hard_failure' | 'pipeline_complete' | 'status_update';
+  readonly runId?: string;
   readonly taskId?: string;
   readonly taskName?: string;
   readonly message: string;

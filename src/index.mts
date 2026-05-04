@@ -288,6 +288,8 @@ async function main(): Promise<void> {
     fallbackTiers: container.fallbackTiers,
     primaryFactory: container.primaryFactory,
     costTracker: container.costTracker,
+    notifier: container.notifier,
+    discordChannel: container.discordChannel,
   });
 
   if (!result.ok) {

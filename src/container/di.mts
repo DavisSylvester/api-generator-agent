@@ -22,6 +22,9 @@ import { Notifier } from '../notifications/notifier.mts';
 import { TelegramChannel } from '../notifications/telegram-channel.mts';
 import { ConsoleChannel } from '../notifications/console-channel.mts';
 import type { NotificationChannel } from '../notifications/notifier.mts';
+import { DiscordChannel } from '../notifications/discord/discord-channel.mts';
+import { WebhookTransport } from '../notifications/discord/webhook-transport.mts';
+import type { IDiscordTransport } from '../notifications/discord/interfaces/i-discord-transport.mts';
 
 export interface Container {
 
@@ -39,6 +42,7 @@ export interface Container {
   readonly fallbackTiers: readonly FallbackTier[];
   readonly costTracker: CostTracker;
   readonly notifier: Notifier;
+  readonly discordChannel: DiscordChannel | undefined;
 }
 
 function createPrimaryFactory(env: EnvConfig, logger: Logger): ILlmFactory {
@@ -217,6 +221,35 @@ export function createContainer(env: EnvConfig): Container {
     logger.info(`Telegram notifications enabled (chat: ${env.TELEGRAM_CHAT_ID})`);
   }
 
+  // Discord — opt-in. Webhook transport for now (forum channel required for thread-per-run).
+  // Bot transport is reserved for a future phase.
+  let discordChannel: DiscordChannel | undefined;
+  if (env.DISCORD_ENABLED) {
+    let transport: IDiscordTransport | undefined;
+    if (env.DISCORD_TRANSPORT === 'webhook' && env.DISCORD_PIPELINE_WEBHOOK_URL) {
+      transport = new WebhookTransport({
+        pipelineWebhookUrl: env.DISCORD_PIPELINE_WEBHOOK_URL,
+        alertWebhookUrl: env.DISCORD_ALERT_WEBHOOK_URL,
+        logger,
+      });
+      logger.info(`Discord notifications enabled (webhook transport)`);
+    } else if (env.DISCORD_TRANSPORT === 'bot') {
+      logger.warn(`Discord bot transport not yet implemented — falling back to webhook check`);
+    }
+
+    if (transport !== undefined) {
+      discordChannel = new DiscordChannel({
+        transport,
+        logger,
+        costTracker,
+        workspaceDir: env.WORKSPACE_DIR,
+        alertMention: env.DISCORD_ALERT_MENTION,
+        editWindowMs: env.DISCORD_EDIT_WINDOW_MS,
+      });
+      channels.push(discordChannel);
+    }
+  }
+
   const notifier = new Notifier({
     channels,
     statusIntervalMs: env.NOTIFICATION_INTERVAL_MS,
@@ -237,5 +270,6 @@ export function createContainer(env: EnvConfig): Container {
     fallbackTiers,
     costTracker,
     notifier,
+    discordChannel,
   };
 }

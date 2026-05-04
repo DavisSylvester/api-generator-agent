@@ -70,4 +70,43 @@ describe('ActivityLog', () => {
     expect(contents).toContain('1234ms');
     await rm(path);
   });
+
+  test('observer is called once per event with the same input', async () => {
+    const path = join(dir, 'e.md');
+    const seen: { type: string; summary: string }[] = [];
+    const log = new ActivityLog(path, (e) => {
+      seen.push({ type: e.type, summary: e.summary });
+    });
+    await log.event({ type: 'task-start', summary: 'one' });
+    await log.event({ type: 'codegen-end', summary: 'two', durationMs: 10 });
+    expect(seen).toEqual([
+      { type: 'task-start', summary: 'one' },
+      { type: 'codegen-end', summary: 'two' },
+    ]);
+    await rm(path);
+  });
+
+  test('observer errors do not break event() or corrupt the log', async () => {
+    const path = join(dir, 'f.md');
+    const log = new ActivityLog(path, () => {
+      throw new Error('observer blew up');
+    });
+    // Should NOT throw.
+    await log.event({ type: 'task-start', summary: 'still works' });
+    const contents = await readFile(path, 'utf-8');
+    expect(contents).toContain('still works');
+    await rm(path);
+  });
+
+  test('async observer is awaited before event() resolves', async () => {
+    const path = join(dir, 'g.md');
+    let observerDone = false;
+    const log = new ActivityLog(path, async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      observerDone = true;
+    });
+    await log.event({ type: 'note', summary: 'sync me' });
+    expect(observerDone).toBe(true);
+    await rm(path);
+  });
 });

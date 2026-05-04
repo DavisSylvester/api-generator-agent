@@ -25,6 +25,18 @@ const envSchema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().optional(),
   TELEGRAM_CHAT_ID: z.string().optional(),
   NOTIFICATION_INTERVAL_MS: z.coerce.number().int().min(60000).max(3600000).default(300000),
+  // ── Discord ────────────────────────────────────────────────────────────
+  DISCORD_ENABLED: z.string().default('false').transform((v) => v === 'true'),
+  DISCORD_TRANSPORT: z.enum(['webhook', 'bot']).default('webhook'),
+  DISCORD_PIPELINE_WEBHOOK_URL: z.string().url().optional(),
+  DISCORD_QA_TOOLS_WEBHOOK_URL: z.string().url().optional(),
+  DISCORD_ALERT_WEBHOOK_URL: z.string().url().optional(),
+  DISCORD_BOT_TOKEN: z.string().optional(),
+  DISCORD_PIPELINE_CHANNEL_ID: z.string().optional(),
+  DISCORD_QA_TOOLS_CHANNEL_ID: z.string().optional(),
+  DISCORD_ALERT_CHANNEL_ID: z.string().optional(),
+  DISCORD_ALERT_MENTION: z.string().optional(),
+  DISCORD_EDIT_WINDOW_MS: z.coerce.number().int().min(50).max(5000).default(250),
 }).superRefine((data, ctx) => {
   if (data.LLM_PROVIDER === 'openai' && !data.OPENAI_API_KEY) {
     ctx.addIssue({
@@ -39,6 +51,42 @@ const envSchema = z.object({
       path: ['ANTHROPIC_API_KEY'],
       message: 'ANTHROPIC_API_KEY is required when LLM_PROVIDER is "anthropic"',
     });
+  }
+
+  if (data.DISCORD_ENABLED) {
+    if (data.DISCORD_TRANSPORT === 'webhook' && !data.DISCORD_PIPELINE_WEBHOOK_URL) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['DISCORD_PIPELINE_WEBHOOK_URL'],
+        message: 'DISCORD_PIPELINE_WEBHOOK_URL is required when DISCORD_ENABLED=true and DISCORD_TRANSPORT=webhook',
+      });
+    }
+    if (data.DISCORD_TRANSPORT === 'bot') {
+      if (!data.DISCORD_BOT_TOKEN) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['DISCORD_BOT_TOKEN'],
+          message: 'DISCORD_BOT_TOKEN is required when DISCORD_ENABLED=true and DISCORD_TRANSPORT=bot',
+        });
+      }
+      if (!data.DISCORD_PIPELINE_CHANNEL_ID) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['DISCORD_PIPELINE_CHANNEL_ID'],
+          message: 'DISCORD_PIPELINE_CHANNEL_ID is required when DISCORD_TRANSPORT=bot',
+        });
+      }
+    }
+    // Forbid mixing transports.
+    const hasWebhookCreds = !!data.DISCORD_PIPELINE_WEBHOOK_URL;
+    const hasBotCreds = !!data.DISCORD_BOT_TOKEN;
+    if (hasWebhookCreds && hasBotCreds) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['DISCORD_TRANSPORT'],
+        message: 'Set only one of DISCORD_BOT_TOKEN or DISCORD_PIPELINE_WEBHOOK_URL, not both',
+      });
+    }
   }
 });
 

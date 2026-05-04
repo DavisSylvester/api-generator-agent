@@ -44,6 +44,8 @@ export interface ActivityEventInput {
   readonly durationMs?: number;
 }
 
+export type ActivityEventObserver = (event: ActivityEventInput) => void | Promise<void>;
+
 const TABLE_HEADER =
   `| Timestamp | Event | Summary | Details | Artifact |\n` +
   `|---|---|---|---|---|\n`;
@@ -67,16 +69,27 @@ const formatMeta = (meta: Record<string, string | number | boolean | undefined> 
 export class ActivityLog {
 
   private readonly filePath: string;
+  private readonly observer: ActivityEventObserver | undefined;
   private headerWritten: boolean = false;
   private chain: Promise<void> = Promise.resolve();
 
-  constructor(filePath: string) {
+  constructor(filePath: string, observer?: ActivityEventObserver) {
     this.filePath = filePath;
+    this.observer = observer;
   }
 
   public async event(input: ActivityEventInput): Promise<void> {
     this.chain = this.chain.then(() => this.writeRow(input));
     await this.chain;
+    // Observers run after the row is durably written. Errors in observers
+    // never propagate — observability must not break the pipeline.
+    if (this.observer !== undefined) {
+      try {
+        await this.observer(input);
+      } catch {
+        // Swallow.
+      }
+    }
   }
 
   private async writeRow(input: ActivityEventInput): Promise<void> {

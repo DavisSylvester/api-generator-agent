@@ -25,6 +25,7 @@ import type { GeneratedFileEntry } from '../io/report-generator.mts';
 import type { OllamaFactory } from '../llm/ollama-factory.mts';
 import { tokenTracker } from '../llm/token-tracker.mts';
 import type { Notifier } from '../notifications/notifier.mts';
+import type { DiscordChannel } from '../notifications/discord/discord-channel.mts';
 import type { PlanningAgent } from '../agents/planning-agent.mts';
 import type { CodegenAgent } from '../agents/codegen-agent.mts';
 import type { EslintAgent } from '../agents/eslint-agent.mts';
@@ -60,6 +61,7 @@ export interface PipelineDeps {
   readonly primaryFactory?: ILlmFactory;
   readonly costTracker?: CostTracker;
   readonly notifier?: Notifier;
+  readonly discordChannel?: DiscordChannel;
   readonly signal?: AbortSignal;
 }
 
@@ -250,6 +252,11 @@ export async function runPipeline(
   const notifier = deps.notifier;
   notifier?.start(taskGraph.tasks.length);
 
+  // Discord — start a per-run thread (if enabled). The DiscordChannel lives
+  // both inside the notifier's channel list (for task-level events) and is
+  // referenced directly for lifecycle + ActivityLog wiring.
+  await deps.discordChannel?.startRun(runId, taskGraph.tasks.length);
+
   // Observability — one ProgressReporter per run, one ActivityLog per task.
   // Writes land under `<workspace>/.docs/` (see Workspace.activityDocsDir()).
   // If the cost tracker is absent (older deps), the reporter is skipped.
@@ -266,7 +273,12 @@ export async function runPipeline(
       costTracker: deps.costTracker,
     });
     for (const t of taskGraph.tasks) {
-      activityLogs.set(t.id, new ActivityLog(workspace.taskActivityPath(t.id)));
+      const observer = deps.discordChannel !== undefined
+        ? (e: import('../io/activity-log.mts').ActivityEventInput) => {
+            deps.discordChannel?.onActivityEvent(t.id, e);
+          }
+        : undefined;
+      activityLogs.set(t.id, new ActivityLog(workspace.taskActivityPath(t.id), observer));
     }
     progressReporter.registerTasks(taskGraph.tasks.map((t) => ({
       id: t.id,
@@ -299,6 +311,7 @@ export async function runPipeline(
 
       await notifier?.notify({
         type: `task_started`,
+        runId,
         taskId: task.id,
         taskName: task.name,
         message: `Starting ${task.name}`,
@@ -322,6 +335,7 @@ export async function runPipeline(
           await featuresStore.markComplete(task.id, state.iteration);
           await notifier?.notify({
             type: `task_passed`,
+            runId,
             taskId: task.id,
             taskName: task.name,
             message: `${task.name} passed`,
@@ -332,6 +346,7 @@ export async function runPipeline(
           await featuresStore.markFailed(task.id, state.iteration, state.lastError ?? 'Unknown error');
           await notifier?.notify({
             type: `hard_failure`,
+            runId,
             taskId: task.id,
             taskName: task.name,
             message: state.lastError,
@@ -341,6 +356,7 @@ export async function runPipeline(
           await featuresStore.markFailed(task.id, state.iteration, state.lastError ?? 'Unknown error');
           await notifier?.notify({
             type: `task_failed`,
+            runId,
             taskId: task.id,
             taskName: task.name,
             message: state.lastError ?? `Failed`,
@@ -656,12 +672,23 @@ export async function runPipeline(
   notifier?.stop();
   await notifier?.notify({
     type: `pipeline_complete`,
+    runId,
     message: `${completedCount}/${taskGraph.tasks.length} passed, ${failedCount} failed (${Math.round(durationMs / 1000)}s)`,
     passed: completedCount,
     failed: failedCount,
     total: taskGraph.tasks.length,
     durationMs,
     timestamp: new Date().toISOString(),
+  });
+
+  // Discord — post run summary card and flush pending edits.
+  await deps.discordChannel?.finishRun({
+    passed: completedCount,
+    failed: failedCount,
+    skipped: skippedCount,
+    hardFailures: hardFailures.map((s) => s.taskId),
+    durationMs,
+    reportPath: workspace.reportPath(),
   });
 
   // Token usage summary
