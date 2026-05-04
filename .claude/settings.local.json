@@ -38,7 +38,10 @@
       "Bash(cp:*)",
       "Read(//c/projects/davis/beautician-scheduling-api/**)",
       "Bash(rm -rf node_modules bun.lockb)",
-      "Bash(gh repo:*)"
+      "Bash(gh repo:*)",
+      "Bash(code-insiders C:\\\\projects\\\\davisSylvester\\\\agents\\\\api-generator-agent *)",
+      "Bash(git pull *)",
+      "Bash(git add *)"
     ]
   }
 }

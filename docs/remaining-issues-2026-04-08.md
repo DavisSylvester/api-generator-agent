@@ -13,8 +13,11 @@
 **15 pass, 5 fail.** All failures are `Value.Check()` returning false for valid data.
 
 Root causes:
+
 1. LLM uses `Type.String({ optional: true })` — TypeBox doesn't support `optional` as a property. Must use `Type.Optional(Type.String())`
+   
 2. LLM uses `{ default: 'value' }` and expects `Value.Check()` to apply defaults — it doesn't. Missing optional fields need `Type.Optional()` wrapper.
+
 3. `additionalProperties: false` is strict — any extra property fails. The generated tests or code may have mismatched properties.
 
 Fix: Add TypeBox optional/default rules to codegen prompt.
